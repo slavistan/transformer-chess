@@ -1,32 +1,45 @@
-from src import lichess_db
-import argparse
-import os
+"""CLI interface."""
 
-def extract(database_file, output):
-    if output is None:
-        output = database_file + "-extracted.tan"
+import multiprocessing as mp
+import time
 
-    # Create subdirectories, if necessary.
-    os.makedirs(os.path.dirname(output), mode=0o755, exist_ok=True)
+import clize
 
-    i = 0
-    with open(output, "w") as outfile:
-        for movetext in lichess_db.extract_movetexts(database_file):
-            outfile.write(movetext + "\n")
-            if i % 1000 == 0:
-                print("\r" * 100 + f"Extracted {i+1} games to '{output}'... ", end="")
-            i += 1
-    print(f"done!")
+from src import db_utils, san_chess
+
+
+# TODO: Implement; Create splitfn, processfn, and collectfn
+def pgn_to_tan(pgn_file: str, *, out_file=None, num_workers=None):
+    """Extracts gamelines from a pgn database and converts them to tan format.
+
+    :param pgn_file: Path fo file containing games.
+    :param out_file: Output file path. If left empty, '-<UNIX_TIMESTAMP>.tan' is appended to the input file path.
+    :param num_workers: Number of workers for parallel processing. Defaults to number of available cores.
+    """
+
+
+def filter_tan(tan_file: str, outcome_union_str: str, *, out_file=None, num_workers=mp.cpu_count()):
+    """Filters a database of chess games in TAN format by outcome.
+
+    :param tan_file: Path to file containing newline-separated gamelines.
+    :param outcome_union_str: Union string of 'san_chess.Outcome's. E.g. 'WHITE_WINS_CHECKMATE|DRAW_STALEMATE'.
+    :param out_file: Output file path. If left empty, '-filtered-<UNIX_TIMESTAMP>.tan' is appended to the input file path.
+    :param num_workers: Number of workers for parallel processing. Defaults to number of available cores.
+    """
+    if out_file is None:
+        out_file = tan_file + f"-filtered-{int(time.time())}.tan"
+    if num_workers <= 0:
+        num_workers = mp.cpu_count()
+    outcome = san_chess.Outcome.from_union_string(outcome_union_str)
+    print(f"{tan_file}, {out_file}, {outcome}, {num_workers=}")
+
+    split_fn = db_utils.splitfn_lines
+    process_fn = db_utils.processfn_filter_by_outcome
+    process_fn_extra_args = (outcome,)
+    collect_fn = db_utils.make_collectfn_write(str(out_file))
+    db_utils.parallel_process(tan_file, split_fn, process_fn, collect_fn, process_fn_extra_args=process_fn_extra_args, num_workers=num_workers, quiet=False)
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    subparsers = parser.add_subparsers(dest="subparser")
+    clize.run({filter_tan.__name__: filter_tan, pgn_to_tan.__name__: pgn_to_tan})
 
-    extract_subparser = subparsers.add_parser("extract", help="Extract trimmed movetext of games from a lichess games database file.")
-    extract_subparser.add_argument("database_file", help="Database of games in PGN format (zst-encoded).")
-    extract_subparser.add_argument("-o", "--output", default=None, dest="output", help="Output file containing the movetexts. By default, appends the suffix '-extracted.tan' to the database file's path.")
-    args = parser.parse_args()
-
-    if args.subparser == "extract":
-        extract(args.database_file, args.output)

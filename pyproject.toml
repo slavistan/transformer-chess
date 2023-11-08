@@ -1,0 +1,12 @@
+[tool.pylint.main]
+jobs = 0
+py-version = 3.11
+recursive = true
+
+[tool.pylint.messages_control]
+max-line-length = 9999
+disable = ['W0511', 'W1514', 'R0914']
+
+[tool.black]
+line-length = 9999
+target-version = ['py311']

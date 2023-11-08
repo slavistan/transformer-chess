@@ -1,0 +1,4 @@
+/.vscode/
+/data/*
+/scratchpad*
+/.pytest_cache
