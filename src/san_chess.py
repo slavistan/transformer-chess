@@ -10,6 +10,44 @@ from frozendict import frozendict
 import chess
 import numpy as np
 
+# Characters required to express a single move in TAN format, e.g. 'a4', 'Qxb4'
+# or 'O-O-O'.
+TAN_MOVE_CHARS = (
+    "1", "2", "3", "4", "5", "6", "7", "8", # Ranks
+    "a", "b", "c", "d", "e", "f", "g", "h", # Files
+    "B", "K", "N", "Q", "R",                # Pieces
+    "x", "=", "O", "-"                      # Captures, promotion, castling
+)
+
+# A moveline is the whitespace-separated concatenation of a game's movelist,
+# not including the game's result, e.g.
+#
+#   e4 f6 d4 g5 Qh5
+#
+TAN_MOVELINE_CHARS = (" ",) + TAN_MOVE_CHARS
+
+# End of game identifiers. Single character abbreviations of '1-0', '0-1' and
+# '1/2-1/2'.
+TAN_EOG_CHARS = (
+    "W", # white wins
+    "S", # black wins
+    "U"  # draw
+)
+
+# A gameline is the whitespace-separated concatenation of a game's movelist,
+# including the end of game identifier, e.g.
+#
+#   e4 f6 d4 g5 Qh5 W
+#
+TAN_GAMELINE_CHARS = TAN_EOG_CHARS + TAN_MOVELINE_CHARS
+
+# The maximum length of a single move in TAN format, e.g. 'Qa1xg3'. Note that
+# the lichess databases don't denote en-passent at all, thus we don't include
+# it in the TAN format.
+TAN_MAX_MOVE_LEN = len("Qa1xg3")
+
+SAN_ANNOTATION_POSTFIX = "?!+#"
+
 @enum.unique
 class Outcome(enum.Flag):
     """Bitmasks expressing game outcomes."""
@@ -117,7 +155,7 @@ class Game:
     """The number of moves that were provided as an opening sequence."""
 
     retries: Collection[int]
-    """Tracks the number of retries that was needed to generate a valid move.
+    """Tracks the number of retries that were needed to generate a valid move.
     One entry per move."""
 
     outcome: Outcome
@@ -126,13 +164,18 @@ class Game:
     def summary(games: Collection[Game]):
         """Returns statistics on a collection of games."""
 
+        # Count canonical game outcomes.
         outcome_counts = {o: 0 for o in Outcome}
         for game in games:
             for outcome in Outcome:
                 if game.outcome & outcome:
                     outcome_counts[outcome] += 1
+
+        # Length of games.
         num_moves = [len(g.moves) for g in games]
         mean, std = np.mean(num_moves), np.std(num_moves)
+
+        # Plot number of retries.
         return {"outcome_counts": outcome_counts, "num_moves_mean": mean, "num_moves_std": std}
 
 
@@ -182,6 +225,7 @@ class RandomPlayer(SANPlayer):
     def suggest_moves(self, n: int = 1):
         legal_moves = list(self.board.legal_moves)
         if len(legal_moves) == 0:
+            # TODO: check if game catches draws and staelates.
             return PlayerSignal.RESIGNATION, ()
 
         moves: List[str] = []
@@ -201,6 +245,7 @@ class RandomPlayer(SANPlayer):
                 move = variation[movepos + 2 :]
             else:
                 move = variation[movepos + 1 :]
+            move = move.rstrip(SAN_ANNOTATION_POSTFIX) # strip annotations
             moves.append(move)
         return None, moves
 
@@ -231,7 +276,8 @@ def play_game(
     black: SANPlayer | None = None,
     *,
     opening_moves: Collection[str] = (),
-    num_retries: int = 0,
+    num_retries: Tuple[int, int] | int = 0, # num of retries for white and black
+    # TODO: implement eager and lazy retry method
 ) -> Game:
     """Plays a game with one or two players, returning a result and game
     statistics. No draws can be claimed to make the outcome deterministic."""
@@ -239,6 +285,17 @@ def play_game(
     moves = list(opening_moves)
     retries = [0] * len(opening_moves)
     players = ([black] if black is not None else []) + [white]  # used to index via booleans, as used by python's chess library.
+
+    # One num_retry per player as a tuple, or one int num_retry for both players.
+    # Results in a tuple of two ints, (black, white).
+    if isinstance(num_retries, int):
+        num_retries = (num_retries, num_retries)
+    elif isinstance(num_retries, tuple) and len(num_retries) == 1 and len(players) == 1:
+        num_retries = (num_retries[0], num_retries[0])
+    elif isinstance(num_retries, tuple) and len(num_retries) == 2 and len(players) == 2:
+        num_retries = (num_retries[1], num_retries[0])
+    else:
+        raise ValueError(f"Invalid num_retries: {num_retries}")
 
     # Set up board and play opening moves.
     board = chess.Board()
@@ -253,13 +310,14 @@ def play_game(
     while True:
         # Check if game has ended.
         outcome = board.outcome()
+        num_retries_move = num_retries[board.turn]
         if outcome is not None:
             return Game(moves, len(opening_moves), retries, Outcome.from_outcome(outcome))
 
         # Get a move suggestions, validate and push it.
         found_move_after_retries = False
         players_idx = board.turn & (len(players) - 1)  # picks the correct player index
-        signal, move_suggestions = players[players_idx].suggest_moves(num_retries + 1)
+        signal, move_suggestions = players[players_idx].suggest_moves(num_retries_move + 1)
         if signal is not None:
             return Game(moves, len(opening_moves), retries, Outcome.from_signal(signal, board.turn))
         retry = 0
@@ -319,3 +377,9 @@ conclusive_games = frozendict(
         ],
     }
 )
+
+def tan_moveline_from_gameline(tan_gameline: str) -> str:
+    tan_gameline = tan_gameline.rstrip()
+    if tan_gameline.endswith(TAN_EOG_CHARS):
+        return tan_gameline[:-2] # strip eog char and trailing whitespace
+    return tan_gameline

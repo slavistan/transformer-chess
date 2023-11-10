@@ -1,12 +1,27 @@
+import sys
 import torch
+from torch.utils.data import Dataset, DataLoader
 from torch import nn
 from torch.nn import functional as F
-from src import util
+from src import san_chess
+from src.tools import count_lines_in_file, torch_elem_size
+from src.san_chess import SANPlayer
 import numpy as np
+import math
+from typing import Collection, List, Sequence
 
 class Model(nn.Module):
     # TODO: Parameterize device
-    def __init__(self, vocab_sz, context_sz, embd_dim, num_heads, num_transformer_blocks, head_sz, lr):
+    def __init__(self,
+        vocab_sz,
+        context_sz,
+        embd_dim,
+        num_heads,
+        num_transformer_blocks,
+        head_sz,
+        lr,
+        *,
+        device=None):
         super().__init__()
 
         # Store params for saving and loading.
@@ -38,10 +53,13 @@ class Model(nn.Module):
         # Optimizer
         self.optimizer = torch.optim.AdamW(self.parameters(), lr=lr)
 
+        if device is not None:
+            self.to(device)
+
     def forward(self, x):
         # x: B, T (integer encoded)
-        tok_embeddings = self.tok_embd(x)
-        pos_embeddings = self.pos_embd(x)
+        tok_embeddings = self.tok_embd(x.int()) # allow for uint8 inputs
+        pos_embeddings = self.pos_embd(x.int())
         x = self.transformer_blocks(tok_embeddings + pos_embeddings) # (B, T, C)
         logits = self.lm_head(x) # vocab_sz
         return logits
@@ -52,6 +70,17 @@ class Model(nn.Module):
         B, T, C = logits.shape
         loss = F.cross_entropy(logits.reshape(B*T, C), y.reshape(B*T))
         return loss
+
+    def train_epoch(self, data_loader, num_iteration, eval_every):
+        for i, (x, y) in enumerate(data_loader):
+            if i >= num_iteration:
+                return
+
+            if i % eval_every == 0:
+                loss_mean, loss_std = self.eval_loss(x, y)
+                print(f"iteration {i}: loss = {loss_mean}+-{loss_std}")
+
+            self.train_batch(x, y)
 
     def train_batch(self, x, y):
         """ Performes a single training step on batch data x, y """
@@ -77,7 +106,8 @@ class Model(nn.Module):
         training = self.training
         self.eval()
         losses = []
-        for c in range(int(np.ceil(len(x) / chunk_sz))):
+        num_chunks = int(np.ceil(len(x) / chunk_sz))
+        for c in range(num_chunks):
             x_chunk = x[c*chunk_sz: (c+1)*chunk_sz]
             y_chunk = y[c*chunk_sz: (c+1)*chunk_sz]
             logits = self.forward(x_chunk)
@@ -127,6 +157,7 @@ class Model(nn.Module):
             result = result.squeeze(0)
 
         return result
+
 
 class AttentionHead(nn.Module):
     """ Single head of masked self-attention """
@@ -219,44 +250,112 @@ class TransformerBlock(nn.Module):
         x = x + self.feed_forward(x)
         return x
 
-def get_batch(x, y, batch_sz):
-    ix = torch.randint(len(x), (batch_sz,))
-    return x[ix], y[ix]
 
-# TODO: Write function to store files to uint8-encoded binary.
-# TODO: Add padding character
-# FIXME: Can't use uint8 as index with nn.Embedding. Is there an option to use uint8 indices?
-def load_data(file, context_size, special_token="%", max_lines=1e12, dtype=torch.long):
-    """ Tokenizes on a character level data from a file of newline-separated
-    sequences of ascii text into a torch.tensor, one sample per line. The
-    special token (index 0) is used to pad until max_len is reached. Lines
-    longer than max_len are skipped altogether. """
+class TransformerPlayer(SANPlayer):
 
-    # First pass: Build up vocabulary and count lines to allocate memory later.
-    chars = set()
-    num_lines = 0 # number of lines read
-    for line in util.read_lines(file, max_len=context_size+1, max_lines=max_lines):
-        num_lines += 1
-        chars = chars | set(line)
-    if special_token in chars:
-        raise "Special token contained by input vocabulary"
+    def __init__(self, model: Model, movelist = ()):
+        self.model = model
+        self.model_context_sz = self.model.init_params["context_sz"]
+        self.model_device = "cuda" if next(model.parameters()).is_cuda else "cpu"
 
-    # Construct vocabulary, encoder and decoder.
-    chars = [special_token] + sorted(list(chars)) # special token needs to have 0th index
-    atoi = {c:i for i, c in enumerate(chars)}
-    itoa = {i:c for c, i in atoi.items()}
-    encode = lambda in_string: torch.as_tensor([atoi[c] for c in in_string], dtype=dtype) # takes string, returns tensor
-    decode = lambda in_tensor: "".join([itoa[i.item()] for i in in_tensor]) # takes 1D tensor, returns string
+        self.movetensor = torch.zeros((self.model_context_sz,), dtype=torch.uint8, device=self.model_device, requires_grad=False)
+        self.write_idx = 1 # write pointer; 0 is reserved for padding
 
-    # Second pass: Fill preallocated zero tensor. Zero encodes the special
-    # token here, hence we don't need to manually pad the sequences.
-    data = torch.zeros((num_lines, context_size), dtype=dtype)
-    for i, line in enumerate(util.read_lines(file, max_len=context_size+1, max_lines=max_lines)):
-        tokens = encode(line)
-        data[i, :len(tokens)] = tokens
+        self.push_moves(movelist)
 
-        # Logging
-        if i % max(1, (num_lines // 1000)) == 0 or i == num_lines-1:
-            print("\r" * 100 + f"processed {i+1}/{num_lines} lines ... ", end="")
+    def push_moves(self, movelist: Collection[str]):
+        for m in movelist:
+            encd = encode_moveline_as_np8(m + " ")
+            num_tokens = len(encd)
 
-    return data, chars, encode, decode
+            # Silently stop adding moves once we've reached the end of the tensor.
+            if len(self.movetensor) < self.write_idx + num_tokens:
+                return
+
+            self.movetensor[self.write_idx:self.write_idx+num_tokens] = torch.from_numpy(encd)
+            self.write_idx += num_tokens
+
+    def suggest_moves(self, n: int = 1):
+        moves = []
+        for _ in range(n):
+            # TODO: Parallelize generation of moves.
+            movetensor_buffer = self.movetensor.clone()
+            write_idx_buffer = self.write_idx
+
+            while True:
+                token = self.model.generate(movetensor_buffer[:write_idx_buffer], num_tokens=1).item()
+
+                # Abort once we exceed the maximum number of characters a move
+                # can consist of.
+                num_generated_tokens = write_idx_buffer - self.write_idx
+                if num_generated_tokens >= san_chess.TAN_MAX_MOVE_LEN:
+                    break
+
+                # Brute force over padding tokens.
+                if token == padding_idx:
+                    continue
+
+                # Break if whitespace is returned. Whitespace is not part of
+                # the returned move. However, continue if no tokens have been
+                # generated yet.
+                if token == whitespace_idx:
+                    if num_generated_tokens == 0:
+                        continue
+                    break
+
+                movetensor_buffer[write_idx_buffer] = token
+                write_idx_buffer += 1
+
+            # Decode generated move.
+            move = decode_moveline_tensor(movetensor_buffer[self.write_idx:write_idx_buffer])
+            moves.append(move)
+
+        return None, moves
+
+
+encode_moveline_dict = { c:np.uint8(i) for i,c in enumerate(san_chess.TAN_MOVELINE_CHARS, 1) }
+decode_moveline_dict = { i:c for c,i in encode_moveline_dict.items() }
+whitespace_idx = encode_moveline_dict[" "]
+padding_idx = 0
+
+def encode_moveline_as_np8(tan_moveline: str) -> np.ndarray:
+    result = np.empty(len(tan_moveline), dtype=np.uint8)
+    for i, c in enumerate(tan_moveline):
+        result[i] = encode_moveline_dict[c]
+    return result
+
+def decode_moveline_tensor(tan_tokens: torch.Tensor) -> str:
+    # TODO: Convert
+    return "".join([decode_moveline_dict[np.uint8(t)] for t in tan_tokens.cpu()])
+
+def decode_moveline(tan_tokens: Sequence[int]) -> str:
+    return "".join([decode_moveline_dict[np.uint8(t)] for t in tan_tokens])
+
+class Dump(Dataset):
+    def __init__(self, tan_file: str, context_size: int, *, device=None, max_size=sys.maxsize, dtype=torch.uint8):
+        width = context_size + 1 # tensor width
+        max_lines = math.floor(max_size / torch_elem_size(dtype) / width)
+        height = count_lines_in_file(tan_file, max_lines=max_lines) # tensor height
+        self.data = torch.zeros((height, width), dtype=dtype)
+        with open(tan_file, "r") as f:
+            for i, gameline in enumerate(f):
+                if i >= max_lines:
+                    break
+
+                moveline = san_chess.tan_moveline_from_gameline(gameline)
+                n = min(len(moveline), context_size)
+                encd = encode_moveline_as_np8(moveline[:n])
+                self.data[i, 1:n+1] = torch.from_numpy(encd)
+
+        if device is not None:
+            self.data = self.data.to(device)
+
+    def __getitem__(self, idx):
+        return self.data[idx, :-1], self.data[idx, 1:]
+
+    def __len__(self):
+        return len(self.data)
+
+    def mem_size(self):
+        return self.data.nelement() * self.data.element_size()
+

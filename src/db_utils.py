@@ -14,40 +14,7 @@ import multiprocessing as mp
 import psutil
 from typing import List, Dict, Tuple, Callable, Any, Collection, BinaryIO, Sequence
 from tqdm.auto import tqdm
-from src.san_chess import Outcome, get_outcome
-
-# Characters required to express a single move in TAN format, e.g. 'a4', 'Qxb4'
-# or 'O-O-O'.
-# fmt: off
-TAN_MOVE_CHARS = (
-    "1", "2", "3", "4", "5", "6", "7", "8", # Ranks
-    "a", "b", "c", "d", "e", "f", "g", "h", # Files
-    "B", "K", "N", "Q", "R",                # Pieces
-    "x", "=", "O", "-"                      # Captures, promotion, castling
-)
-# fmt: on
-
-# A moveline is the whitespace-separated concatenation of a game's movelist,
-# not including the game's result, e.g.
-#
-#   e4 f6 d4 g5 Qh5
-#
-TAN_MOVELINE_CHARS = (" ",) + TAN_MOVE_CHARS
-
-# End of game identifiers. Single character abbreviations of '1-0', '0-1' and
-# '1/2-1/2'.
-TAN_EOG_CHARS = (
-    "W", # white wins
-    "S", # black wins
-    "U"  # draw
-)
-
-# A gameline is the whitespace-separated concatenation of a game's movelist,
-# including the end of game identifier, e.g.
-#
-#   e4 f6 d4 g5 Qh5 W
-#
-TAN_GAMELINE_CHARS = TAN_EOG_CHARS + TAN_MOVELINE_CHARS
+from src.san_chess import Outcome, get_outcome, SAN_ANNOTATION_POSTFIX
 
 # String to array of ints.
 # def encode_tan_movechars(tan_movechars):
@@ -110,7 +77,6 @@ def tan_gamelines_from_pgn_zstd(db_file: str, out_file: str | None = None):
 
 #                 data[i, 1 : len(tokens) + 1] = tokens
 
-
 _san_movetext_re = [
     # Matches move indices. In addition to regular move indices, some moves
     # are annotated with engine evaluations and use use a triple period to
@@ -124,7 +90,7 @@ _san_movetext_re = [
 
     # Matches move quality annotations such as blunders or brilliant moves, and
     # checks and checkmate indicators.
-    re.compile(r"[?!+#]")
+    re.compile(f"[{SAN_ANNOTATION_POSTFIX}]")
 ]
 
 _san_movetext_eog_to_tan = {
