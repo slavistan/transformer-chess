@@ -1,11 +1,14 @@
 """CLI interface."""
 
+from typing import Literal
+
+import torch
 import multiprocessing as mp
 import time
 
 import clize
 
-from src import db_utils, san_chess
+from src import db_utils, san_chess, model
 
 
 # TODO: Implement; Create splitfn, processfn, and collectfn
@@ -26,6 +29,7 @@ def filter_tan(tan_file: str, outcome_union_str: str, *, out_file=None, num_work
     :param out_file: Output file path. If left empty, '-filtered-<UNIX_TIMESTAMP>.tan' is appended to the input file path.
     :param num_workers: Number of workers for parallel processing. Defaults to number of available cores.
     """
+
     if out_file is None:
         out_file = tan_file + f"-filtered-{int(time.time())}.tan"
     if num_workers <= 0:
@@ -40,6 +44,39 @@ def filter_tan(tan_file: str, outcome_union_str: str, *, out_file=None, num_work
     db_utils.parallel_process(tan_file, split_fn, process_fn, collect_fn, process_fn_extra_args=process_fn_extra_args, num_workers=num_workers, quiet=False)
 
 
-if __name__ == "__main__":
-    clize.run({filter_tan.__name__: filter_tan, pgn_to_tan.__name__: pgn_to_tan})
+def play_model(
+    pth_file: str,
+    *,
+    device = "cuda" if torch.cuda.is_available() else "cpu",
+    side = "white",
+    num_retries = 8,
+):
+    """Plays a chess game against a model.
 
+    :param pth_file: Path to model file.
+    :param device: Device to run model on.
+    :param side: Side to play as, either 'white' or 'black'.
+    :param num_retries: Number of retries to allow the transformer for each move.
+    """
+
+    m = model.Model.load(pth_file).to(device)
+    model_player = model.TransformerPlayer(m)
+    gui_player = san_chess.GUIPlayer()
+    players = [gui_player, model_player]
+    retries = (0, num_retries)
+    if side == "black":
+        players = players[::-1]
+        retries = retries[::-1]
+    san_chess.play_game(*players, num_retries=retries)
+    # TODO: Preserve window after end if game and show result. Probably needs a
+    # different setup for playing games altogehter.
+
+
+if __name__ == "__main__":
+    clize.run(
+        {
+            filter_tan.__name__: filter_tan,
+            pgn_to_tan.__name__: pgn_to_tan,
+            play_model.__name__: play_model,
+        }
+    )
