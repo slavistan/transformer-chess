@@ -1,3 +1,4 @@
+from __future__ import annotations
 import sys
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -11,7 +12,6 @@ import math
 from typing import Collection, List, Sequence
 
 class Model(nn.Module):
-    # TODO: Parameterize device
     def __init__(self,
         vocab_sz,
         context_sz,
@@ -71,14 +71,40 @@ class Model(nn.Module):
         loss = F.cross_entropy(logits.reshape(B*T, C), y.reshape(B*T))
         return loss
 
-    def train_epoch(self, data_loader, num_iteration, eval_every):
-        for i, (x, y) in enumerate(data_loader):
-            if i >= num_iteration:
+    def train_epoch(self, data_loader, *, eval_every=None, num_iteration=None):
+        for i, (x, y) in enumerate(data_loader, 0):
+            if num_iteration is not None and i >= num_iteration:
                 return
 
-            if i % eval_every == 0:
+            num_games = 100
+            num_retries = 8
+            if eval_every is not None and i % eval_every == 0:
+                print(f"it {i-1} done: ", end="", flush=True)
+                print("batch loss = ", end="", flush=True)
                 loss_mean, loss_std = self.eval_loss(x, y)
-                print(f"iteration {i}: loss = {loss_mean}+-{loss_std}")
+                print(f"{loss_mean:.4f}+-{loss_std:.4f}", end="", flush=True)
+
+                print(", self-play: ", end="", flush=True)
+                game_results = []
+                for i in range(num_games):
+                    p = TransformerPlayer(self)
+                    game_result = san_chess.play_game(p, num_retries=num_retries)
+                    game_results.append(game_result)
+                summary = san_chess.Game.summary(game_results)
+                print(f"num_moves={summary['num_moves_mean']}+-{summary['num_moves_std']:.4f} (retries {summary['num_retries_mean']:.4f}+-{summary['num_retries_std']:.4f})", end="", flush=True)
+
+                print(", vs-random: ", end="", flush=True)
+                game_results = []
+                for i in range(num_games):
+                    p = TransformerPlayer(self)
+                    p2 = san_chess.RandomPlayer()
+                    game_result = san_chess.play_game(p, p2, num_retries=(num_retries, 0))
+                    game_results.append(game_result)
+                summary = san_chess.Game.summary(game_results)
+                print(f"num_moves={summary['num_moves_mean']}+-{summary['num_moves_std']} (retries {summary['num_retries_white_mean']:.4f}+-{summary['num_retries_white_std']:.4f})", end="", flush=True)
+
+                print()
+
 
             self.train_batch(x, y)
 
@@ -117,12 +143,11 @@ class Model(nn.Module):
         return np.mean(losses), np.std(losses)
 
     def save(self, path):
-        # TODO: implement sane saving method
-        pass
+        torch.save(self, path)
 
-    def load(self, path):
-        # TODO
-        pass
+    @staticmethod
+    def load(path) -> Model:
+        return torch.load(path)
 
     @torch.no_grad()
     def generate(self, x: torch.Tensor, num_tokens=1):
@@ -261,21 +286,31 @@ class TransformerPlayer(SANPlayer):
         self.movetensor = torch.zeros((self.model_context_sz,), dtype=torch.uint8, device=self.model_device, requires_grad=False)
         self.write_idx = 1 # write pointer; 0 is reserved for padding
 
+        self.context_exceeded = False
+
         self.push_moves(movelist)
 
     def push_moves(self, movelist: Collection[str]):
+        if self.context_exceeded:
+            return
+
         for m in movelist:
             encd = encode_moveline_as_np8(m + " ")
             num_tokens = len(encd)
 
-            # Silently stop adding moves once we've reached the end of the tensor.
-            if len(self.movetensor) < self.write_idx + num_tokens:
+            # Silently stop adding moves once we've reached the end of the
+            # tensor. Resignation will follow.
+            if self.write_idx + num_tokens >= len(self.movetensor):
+                self.context_exceeded = True
                 return
 
             self.movetensor[self.write_idx:self.write_idx+num_tokens] = torch.from_numpy(encd)
             self.write_idx += num_tokens
 
     def suggest_moves(self, n: int = 1):
+        if self.context_exceeded:
+            return
+
         moves = []
         for _ in range(n):
             # TODO: Parallelize generation of moves.

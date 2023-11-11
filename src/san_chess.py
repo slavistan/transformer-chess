@@ -1,14 +1,19 @@
 """Basic chess playing abstraction."""
 from __future__ import annotations
+import tkinter as tk
 from collections.abc import Collection
 from abc import ABC, abstractmethod
 import random
-from typing import List, Tuple
+from typing import List, Tuple, Sequence, Literal
+import io
 import enum
 from dataclasses import dataclass
 from frozendict import frozendict
 import chess
+import chess.svg
+import cairosvg
 import numpy as np
+from PIL import Image, ImageTk
 
 # Characters required to express a single move in TAN format, e.g. 'a4', 'Qxb4'
 # or 'O-O-O'.
@@ -75,16 +80,33 @@ class Outcome(enum.Flag):
     ABORT_INVALID_OPENING = enum.auto()
     """Game abort due to providing an invalid sequence of opening moves."""
 
-    WHITE_WINS_RESIGNATION = enum.auto()
-    BLACK_WINS_RESIGNATION = enum.auto()
-    """Player resigns. The specific reason for this depends on the
-    implementation of the player itself."""
+    WHITE_WINS_RESIGNATION_DIVERGED_FROM_PRESET = enum.auto()
+    BLACK_WINS_RESIGNATION_DIVERGED_FROM_PRESET = enum.auto()
+    """See corresponding PlayerSignal."""
+
+    WHITE_WINS_RESIGNATION_CONTEXT_OVERFLOW = enum.auto()
+    BLACK_WINS_RESIGNATION_CONTEXT_OVERFLOW = enum.auto()
+    """See corresponding PlayerSignal."""
+
+    WHITE_WINS_RESIGNATION_ABANDONED_GAME = enum.auto()
+    BLACK_WINS_RESIGNATION_ABANDONED_GAME = enum.auto()
+    """See corresponding PlayerSignal."""
 
     # Aliases to define comfy helpers.
-    WHITE_WINS = WHITE_WINS_CHECKMATE | WHITE_WINS_DISQUALIFICATION | WHITE_WINS_RESIGNATION
+    WHITE_WINS = \
+        WHITE_WINS_CHECKMATE | \
+        WHITE_WINS_DISQUALIFICATION | \
+        WHITE_WINS_RESIGNATION_DIVERGED_FROM_PRESET | \
+        WHITE_WINS_RESIGNATION_CONTEXT_OVERFLOW | \
+        WHITE_WINS_RESIGNATION_ABANDONED_GAME
     """White won the game."""
 
-    BLACK_WINS = BLACK_WINS_CHECKMATE | BLACK_WINS_DISQUALIFICATION | BLACK_WINS_RESIGNATION
+    BLACK_WINS = \
+        BLACK_WINS_CHECKMATE | \
+        BLACK_WINS_DISQUALIFICATION | \
+        BLACK_WINS_RESIGNATION_DIVERGED_FROM_PRESET | \
+        BLACK_WINS_RESIGNATION_CONTEXT_OVERFLOW | \
+        BLACK_WINS_RESIGNATION_ABANDONED_GAME
     """Black won the game."""
 
     CHECKMATE = WHITE_WINS_CHECKMATE | BLACK_WINS_CHECKMATE
@@ -109,16 +131,6 @@ class Outcome(enum.Flag):
         if outcome.winner is not None:
             return Outcome.WHITE_WINS_CHECKMATE if outcome.winner else Outcome.BLACK_WINS_CHECKMATE
         return _termination_to_outcome[outcome.termination]
-
-    @staticmethod
-    def from_signal(signal: PlayerSignal, turn: chess.Color) -> Outcome:
-        """Returns a canonical Outcome from a player signal."""
-
-        if signal == PlayerSignal.RESIGNATION:
-            if turn == chess.WHITE:
-                return Outcome.BLACK_WINS_RESIGNATION
-            return Outcome.WHITE_WINS_RESIGNATION
-        raise NotImplementedError
 
     @staticmethod
     def from_union_string(union_str: str) -> Outcome:
@@ -175,15 +187,44 @@ class Game:
         num_moves = [len(g.moves) for g in games]
         mean, std = np.mean(num_moves), np.std(num_moves)
 
+        # Retries.
+        # num_retries_black = [r for r in g.retries[1::2] for g in games]
+        num_retries_black = [r for g in games for r in g.retries[1::2] ]
+        num_retries_white = [r for g in games for r in g.retries[::2] ]
+        num_retries_black_mean, num_retries_black_std = np.mean(num_retries_black), np.std(num_retries_black)
+        num_retries_white_mean, num_retries_white_std = np.mean(num_retries_white), np.std(num_retries_white)
+        num_retries = [r for g in games for r in g.retries]
+        num_retries_mean, num_retries_std = np.mean(num_retries), np.std(num_retries)
+
         # Plot number of retries.
-        return {"outcome_counts": outcome_counts, "num_moves_mean": mean, "num_moves_std": std}
+        return {
+            "outcome_counts": outcome_counts,
+            "num_moves_mean": mean,
+            "num_moves_std": std,
+            "num_retries_mean": num_retries_mean,
+            "num_retries_std": num_retries_std,
+            "num_retries_black_mean": num_retries_black_mean,
+            "num_retries_black_std": num_retries_black_std,
+            "num_retries_white_mean": num_retries_white_mean,
+            "num_retries_white_std": num_retries_white_std,
+            }
 
 
 @enum.unique
 class PlayerSignal(enum.Enum):
     """Signal communicated by players in addition to their moves."""
 
-    RESIGNATION = enum.auto()
+    ABANDONED_GAME = enum.auto()
+    """GUIPlayer: Closed window."""
+
+    DIVERGED_FROM_PRESET = enum.auto()
+    """Preset player: moves pushed to the movestack diverge from the preset."""
+
+    NO_LEGAL_MOVES = enum.auto()
+    """Random player: no legal moves available. Should not happen."""
+
+    CONTEXT_OVERFLOW = enum.auto()
+    """Transformer: context size exceeded."""
 
 
 class SANPlayer(ABC):
@@ -194,11 +235,11 @@ class SANPlayer(ABC):
         """Initializes player with an optional movelist."""
 
     @abstractmethod
-    def push_moves(self, moves: Collection[str]):
+    def push_moves(self, movelist: Collection[str]):
         """Pushes moves to the player's internal move stack."""
 
     @abstractmethod
-    def suggest_moves(self, n: int = 1) -> Tuple[PlayerSignal | None, Collection[str]]:
+    def suggest_moves(self, n: int = 1) -> Tuple[PlayerSignal | None, Sequence[str]]:
         """Suggests moves in SAN format. Must not modify move stack."""
 
 
@@ -207,7 +248,7 @@ class RandomPlayer(SANPlayer):
 
     def __init__(
         self,
-        moves: Collection[str] = (),
+        movelist: Collection[str] = (),
         *,
         p_invalid: float = 0.0,
         rng: random.Random = random.Random(),
@@ -215,18 +256,17 @@ class RandomPlayer(SANPlayer):
         self.rng = rng
         self.p_invalid = p_invalid
         self.board = chess.Board()
-        for move in moves:
+        for move in movelist:
             self.board.push_san(move)
 
-    def push_moves(self, moves: Collection[str]):
-        for move in moves:
+    def push_moves(self, movelist: Collection[str]):
+        for move in movelist:
             self.board.push_san(move)
 
     def suggest_moves(self, n: int = 1):
         legal_moves = list(self.board.legal_moves)
         if len(legal_moves) == 0:
-            # TODO: check if game catches draws and staelates.
-            return PlayerSignal.RESIGNATION, ()
+            return PlayerSignal.NO_LEGAL_MOVES, ()
 
         moves: List[str] = []
         for _ in range(n):
@@ -252,23 +292,116 @@ class RandomPlayer(SANPlayer):
 
 class PresetPlayer(SANPlayer):
     """Plays preset moves. Used for testing via fixed sequences of moves.
-    Throws if game exceeds preset moves."""
+    Aborts game if preset sequence of moves is exceeded. It's not checked
+    whether the pushed moves match those in the preset movelist."""
 
     def __init__(
         self,
-        moves: Collection[str] = (),
+        movelist: Collection[str] = (),
     ):
-        self.moves = list(moves)
+        self.moves = list(movelist)
         self.move_idx = 0  # current move
 
-    def push_moves(self, moves: Collection[str]):
-        self.move_idx += len(moves)
+    def push_moves(self, movelist: Collection[str]):
+        self.move_idx += len(movelist)
 
     def suggest_moves(self, n: int = 1):
         if self.move_idx >= len(self.moves):
-            moves: List[str] = []
-            return PlayerSignal.RESIGNATION, moves
+            return PlayerSignal.DIVERGED_FROM_PRESET, []
         return None, [self.moves[self.move_idx]] * n
+
+
+class GUIPlayer(SANPlayer):
+    """Gets moves via a GUI."""
+
+    def __init__(self, movelist: Collection[str] = (), *, board_sz=800):
+        # Tkinter setup.
+        self.root = tk.Tk()
+        self.root.title("Chess GUI")
+        self.root.bind("<Escape>", self.close)
+        self.board_sz = board_sz
+        self.canvas = tk.Canvas(self.root, width=self.board_sz, height=self.board_sz)
+        self.canvas.pack()
+        self.canvas.bind("<Button-1>", self.on_click)
+
+        # We need to keep a reference to the image, otherwise the variable will
+        # be garbage collected and the image memory will be freed, resulting in
+        # the canvas being empty.See https://stackoverflow.com/questions/2223985
+        self.tk_img = None
+
+        self.sig = None
+        self.move = None
+        self.input_waiting = tk.BooleanVar()
+
+        self.board = chess.Board()
+        self.selected_square = None
+
+        self.push_moves(movelist)
+
+    def push_moves(self, movelist: Collection[str]):
+        for move in movelist:
+            self.board.push_san(move)
+        self.draw_board()
+
+    def suggest_moves(self, n: int = 1):
+        self.root.wait_variable(self.input_waiting)
+        sig, moves = self.sig, [self.move]
+        return sig, moves
+
+    def close(self, _event):
+        self.sig = PlayerSignal.ABANDONED_GAME
+        self.move = None
+        self.root.destroy()
+        self.input_waiting.set(True)
+
+    def draw_board(self, **kwargs):
+        # Draw the chess board using SVG. We have to convert to PGN first.
+        svg_data = chess.svg.board(board=self.board, coordinates=False, **kwargs)
+        png_data = cairosvg.svg2png(bytestring=svg_data, output_width=self.board_sz, output_height=self.board_sz)
+        img = Image.open(io.BytesIO(png_data))
+        img = img.resize((self.board_sz, self.board_sz), Image.LANCZOS)
+        self.tk_img = ImageTk.PhotoImage(img)
+        self.canvas.create_image(0, 0, anchor=tk.NW, image=self.tk_img)
+        self.root.update_idletasks()
+
+    def on_click(self, event):
+        square_sz = self.board_sz // 8
+        file = max("a", min(chr((event.x // square_sz) + ord("a")), "h"))
+        rank = max(1, min(8 - (event.y // square_sz), 8))
+        square = f"{file}{rank}"
+
+        if self.selected_square is None:
+            self.selected_square = square
+            fill = {chess.SQUARES[chess.parse_square(square)]: "#cc0000cc"}
+        else:
+            if self.selected_square == square:
+                pass
+            else:
+                movename_uci = self.selected_square + square
+                move_uci = chess.Move.from_uci(movename_uci)
+                if move_uci in self.board.legal_moves:
+
+                    # Push the move to the other player:
+                    # Hack to generate a move in san notation:
+                    # this will produce a continuation for black: '11...Rg8'
+                    # or a move for white: '3. Qd3'. This has to be done
+                    # before pushing to the board.
+                    variation = self.board.variation_san([move_uci])
+                    movepos = variation.rfind(".")
+                    if variation[movepos + 1] == " ":
+                        move_tan = variation[movepos + 2 :]
+                    else:
+                        move_tan = variation[movepos + 1 :]
+                    move_tan = move_tan.rstrip(SAN_ANNOTATION_POSTFIX) # strip annotations
+
+                    self.sig = None
+                    self.move = move_tan
+                    self.input_waiting.set(True)
+
+            self.selected_square = None
+            fill = {}
+
+        self.draw_board(fill=fill)
 
 
 def play_game(
@@ -277,14 +410,37 @@ def play_game(
     *,
     opening_moves: Collection[str] = (),
     num_retries: Tuple[int, int] | int = 0, # num of retries for white and black
-    # TODO: implement eager and lazy retry method
+    retry_strategy: Literal["eager", "lazy"] = "lazy"
 ) -> Game:
     """Plays a game with one or two players, returning a result and game
     statistics. No draws can be claimed to make the outcome deterministic."""
 
+    def get_move(num_retries: int, players_idx: int):
+        if retry_strategy == "eager":
+            sig, moves = players[players_idx].suggest_moves(num_retries + 1)
+            if sig is None and len(moves) == 0:
+                # TODO: Incorporate check for moves into function body. Make it result in a forfeit.
+                raise ValueError("No moves suggested")
+            if len(moves) > 0:
+                for m in moves:
+                    yield sig, m
+            else:
+                yield sig, []
+
+        else:
+            for _ in range(num_retries+1):
+                sig, moves = players[players_idx].suggest_moves(1)
+                if sig is None and len(moves) == 0:
+                    raise ValueError("No moves suggested")
+
+                yield sig, moves[0] if len(moves) > 0 else []
+
     moves = list(opening_moves)
     retries = [0] * len(opening_moves)
-    players = ([black] if black is not None else []) + [white]  # used to index via booleans, as used by python's chess library.
+
+    # Players used to index via booleans, as used by python's chess library.
+    # (black, white) for two players, otherwise (white)
+    players = ([black] if black is not None else []) + [white]
 
     # One num_retry per player as a tuple, or one int num_retry for both players.
     # Results in a tuple of two ints, (black, white).
@@ -317,11 +473,30 @@ def play_game(
         # Get a move suggestions, validate and push it.
         found_move_after_retries = False
         players_idx = board.turn & (len(players) - 1)  # picks the correct player index
-        signal, move_suggestions = players[players_idx].suggest_moves(num_retries_move + 1)
-        if signal is not None:
-            return Game(moves, len(opening_moves), retries, Outcome.from_signal(signal, board.turn))
+
         retry = 0
-        for retry, move in enumerate(move_suggestions):
+        for retry, (signal, move) in enumerate(get_move(num_retries_move, players_idx)):
+            # Handle signals.
+            if signal is not None:
+                if signal == PlayerSignal.DIVERGED_FROM_PRESET:
+                    if board.turn == chess.WHITE:
+                        outcome = Outcome.BLACK_WINS_RESIGNATION_DIVERGED_FROM_PRESET
+                    else:
+                        outcome = Outcome.WHITE_WINS_RESIGNATION_DIVERGED_FROM_PRESET
+                elif signal == PlayerSignal.CONTEXT_OVERFLOW:
+                    if board.turn == chess.WHITE:
+                        outcome = Outcome.BLACK_WINS_RESIGNATION_CONTEXT_OVERFLOW
+                    else:
+                        outcome = Outcome.WHITE_WINS_RESIGNATION_CONTEXT_OVERFLOW
+                elif signal == PlayerSignal.ABANDONED_GAME:
+                    if board.turn == chess.WHITE:
+                        outcome = Outcome.BLACK_WINS_RESIGNATION_ABANDONED_GAME
+                    else:
+                        outcome = Outcome.WHITE_WINS_RESIGNATION_ABANDONED_GAME
+                else:
+                    raise NotImplementedError(f"Unknown signal: {signal}")
+                return Game(moves, len(opening_moves), retries, outcome)
+
             try:
                 board.push_san(move)
             except (chess.InvalidMoveError, chess.IllegalMoveError, chess.AmbiguousMoveError):

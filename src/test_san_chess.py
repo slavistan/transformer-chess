@@ -19,7 +19,7 @@ def test_preset_player():
 
             # Sends out of moves signal once the movelist is exceeded.
             sig, moves = p.suggest_moves()
-            assert sig == san_chess.PlayerSignal.RESIGNATION
+            assert sig == san_chess.PlayerSignal.DIVERGED_FROM_PRESET
             assert moves == []
 
 
@@ -58,20 +58,15 @@ def test_play_game():
 def test_get_outcome():
     """Tests the get_outcome() function."""
 
-    movelist = "e4 f5 f4 g5 Qh5".split(" ")
-    outcome = san_chess.get_outcome(movelist)
+    fools_mate = san_chess.conclusive_games[san_chess.Outcome.WHITE_WINS_CHECKMATE][0]
+    outcome = san_chess.get_outcome(fools_mate)
     assert outcome == san_chess.Outcome.WHITE_WINS_CHECKMATE
-    outcome = san_chess.get_outcome(movelist[:-1])
-    assert outcome == san_chess.Outcome.BLACK_WINS_RESIGNATION
-    outcome = san_chess.get_outcome(movelist[:-2])
-    assert outcome == san_chess.Outcome.WHITE_WINS_RESIGNATION
+    outcome = san_chess.get_outcome(fools_mate[:-1])
+    assert outcome == san_chess.Outcome.BLACK_WINS_RESIGNATION_DIVERGED_FROM_PRESET
+    outcome = san_chess.get_outcome(fools_mate[:-2])
+    assert outcome == san_chess.Outcome.WHITE_WINS_RESIGNATION_DIVERGED_FROM_PRESET
 
-    movelist = "e9 y5 f4 g5 Qh5".split(" ")
-    outcome = san_chess.get_outcome(movelist)
+    invalid_moves = "e9 y5 f4 g5 Qh5".split(" ")
+    outcome = san_chess.get_outcome(invalid_moves)
     assert outcome == san_chess.Outcome.ABORT_INVALID_OPENING
 
-
-def test_outcome():
-    """Tests the Outcome enum class."""
-
-    # test from_union_string
