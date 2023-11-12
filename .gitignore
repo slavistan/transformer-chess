@@ -1,4 +1,7 @@
 /.vscode/
 /data/*
-/scratchpad*
+/*scratchpad*
 /.pytest_cache
+
+# drawio backup files
+/.$*bkp
