@@ -317,6 +317,7 @@ class TransformerPlayer(SANPlayer):
             movetensor_buffer = self.movetensor.clone()
             write_idx_buffer = self.write_idx
 
+            # TODO: return out of context signal
             while True:
                 token = self.model.generate(movetensor_buffer[:write_idx_buffer], num_tokens=1).item()
 

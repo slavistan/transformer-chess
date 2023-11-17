@@ -1,10 +1,11 @@
 """Basic chess playing abstraction."""
 from __future__ import annotations
 import tkinter as tk
+from copy import deepcopy
 from collections.abc import Collection
 from abc import ABC, abstractmethod
 import random
-from typing import List, Tuple, Sequence, Literal
+from typing import List, Tuple, Sequence, Literal, Set
 import io
 import enum
 from dataclasses import dataclass
@@ -228,8 +229,12 @@ class PlayerSignal(enum.Enum):
 
 
 class SANPlayer(ABC):
-    """Chess player interface."""
 
+    # Parameters with which player was initialized. Used to annotate
+    # evaluations and performance measurements.
+    info = {}
+
+    """Chess player interface."""
     @abstractmethod
     def __init__(self, movelist: Collection[str] = ()):
         """Initializes player with an optional movelist."""
@@ -258,6 +263,11 @@ class RandomPlayer(SANPlayer):
         self.board = chess.Board()
         for move in movelist:
             self.board.push_san(move)
+
+        self.info = {
+            f"{movelist=}".split("=")[0]: list(movelist),
+            f"{p_invalid=}".split("=")[0]: p_invalid,
+        }
 
     def push_moves(self, movelist: Collection[str]):
         for move in movelist:
@@ -302,6 +312,8 @@ class PresetPlayer(SANPlayer):
         self.moves = list(movelist)
         self.move_idx = 0  # current move
 
+        self.info[f"{movelist=}".split("=")[0]] = list(movelist)
+
     def push_moves(self, movelist: Collection[str]):
         self.move_idx += len(movelist)
 
@@ -337,6 +349,8 @@ class GUIPlayer(SANPlayer):
         self.selected_square = None
 
         self.push_moves(movelist)
+
+        self.info = {f"{movelist=}".split("=")[0]: deepcopy(movelist)}
 
     def push_moves(self, movelist: Collection[str]):
         for move in movelist:
@@ -558,3 +572,23 @@ def tan_moveline_from_gameline(tan_gameline: str) -> str:
     if tan_gameline.endswith(TAN_EOG_CHARS):
         return tan_gameline[:-2] # strip eog char and trailing whitespace
     return tan_gameline
+
+
+def play_puzzle(
+    opening: Sequence[str],
+    continuations: Set[str], # one-move continuations
+    player: SANPlayer,
+    *,
+    num_retries = 0,
+):
+    player.push_moves(opening)
+
+    moves = set()
+    for _ in range(num_retries+1):
+        sig, suggested_moves = player.suggest_moves()
+        if sig is not None:
+            return False
+        moves.add(suggested_moves[0])
+        if continuations & moves:
+            return True
+    return False
