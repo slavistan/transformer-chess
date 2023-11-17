@@ -8,7 +8,7 @@ import time
 
 import clize
 
-from src import db_utils, san_chess, model
+from src import db_utils, san_chess, vanilla_transformer
 
 
 # TODO: Implement; Create splitfn, processfn, and collectfn
@@ -19,6 +19,7 @@ def pgn_to_tan(pgn_file: str, *, out_file=None, num_workers=None):
     :param out_file: Output file path. If left empty, '-<UNIX_TIMESTAMP>.tan' is appended to the input file path.
     :param num_workers: Number of workers for parallel processing. Defaults to number of available cores.
     """
+    # TODO: gogogogo
 
 
 def filter_tan(tan_file: str, outcome_union_str: str, *, out_file=None, num_workers=mp.cpu_count()):
@@ -59,8 +60,8 @@ def play_model(
     :param num_retries: Number of retries to allow the transformer for each move.
     """
 
-    m = model.Model.load(pth_file).to(device)
-    model_player = model.TransformerPlayer(m)
+    m = vanilla_transformer.Model.load(pth_file).to(device)
+    model_player = vanilla_transformer.TransformerPlayer(m)
     gui_player = san_chess.GUIPlayer()
     players = [gui_player, model_player]
     retries = (0, num_retries)
