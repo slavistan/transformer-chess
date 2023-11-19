@@ -1,0 +1,24 @@
+UTF-8 Test File
+---------------
+
+Chess:
+
+d4 e5 e3 exd4 exd4 Nc6 Nf3 W
+
+e4 e6 Bc4 b6 f3 Bb7 Nh3 Bd6 Nf2 h6 d4 Ne7 c3 c6 Be3 Ng6 Nd2 Nf4 Bb3 Nxg2 Kf1 Nxe3 S
+
+
+Mathematics and Science:
+
+  ∮ E⋅da = Q,  n → ∞, ∑ f(i) = ∏ g(i), ∀x∈ℝ: ⌈x⌉ = −⌊−x⌋, α ∧ ¬β = ¬(¬α ∨ β),
+
+  ℕ ⊆ ℕ₀ ⊂ ℤ ⊂ ℚ ⊂ ℝ ⊂ ℂ, ⊥ < a ≠ b ≡ c ≤ d ≪ ⊤ ⇒ (A ⇔ B),
+
+  2H₂ + O₂ ⇌ 2H₂O, R = 4.7 kΩ, ⌀ 200 mm
+
+
+Chess II:
+
+d4 e5 e3 exd4 exd4 Nc6 Nf3 W
+
+e4 e6 Bc4 b6 f3 Bb7 Nh3 Bd6 Nf2 h6 d4 Ne7 c3 c6 Be3 Ng6 Nd2 Nf4 Bb3 Nxg2 Kf1 Nxe3 S

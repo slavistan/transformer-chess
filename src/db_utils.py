@@ -213,6 +213,9 @@ def worker(
     with open(in_file, "rb") as f:
         for i in range(0, len(chunks_info), 2):
             offset, sz = chunks_info[i:i+2]
+
+            # TODO: Parameterize chunks as bytes or mmep'd io
+            #       Add parameter chunk_mmap: bool = False
             f.seek(offset)
             chunk_data = f.read(sz)
             chunk_result = process_fn(chunk_data, *process_fn_extra_args)
