@@ -1,9 +1,13 @@
+from __future__ import annotations
 import os
 import itertools
 import pytest
+from typing import Callable, Type, Any
+import pytest
 from src.tools import *
+from src.db_utils import splitfn_chunk
 
-utf8_file = "test/assets/utf-8.txt"  # small file (422 bytes) fitting into a single page
+utf8_file = "test/assets/utf-8.txt"  # small file (581 bytes) fitting into a single page
 pgn_file = "data/example.pgn"  # large file (1140613 bytes) spanning multiple pages
 files = [utf8_file, pgn_file]
 
@@ -187,7 +191,6 @@ class TestUnalignedRoMmapOpen:
             have = mm.readline()
             assert have == want
 
-
     def test_closed(self):
         with open(utf8_file, "rb") as f:
             mm = RoUnalignedMMAP(f.fileno(), 128, 16)
@@ -196,3 +199,78 @@ class TestUnalignedRoMmapOpen:
             assert not mm.closed
             mm.close()
             assert mm.closed
+
+    def test_mmap_from_opened_file(self):
+        file_path = utf8_file
+        file_sz = os.path.getsize(file_path)
+        mask_a = b"Chess"
+        mask_b = b"Chess II"
+        with open(file_path, "rb") as f:
+            data = f.read()
+            mask_a_offset = data.find(mask_a)
+            mask_b_offset = data.find(mask_b)
+
+            with unaligned_ro_mmap_open(f, file_sz - mask_a_offset, mask_a_offset) as mm:
+                assert mm.tell() == 0
+                have = mm.rfind(mask_a)
+                want = mask_b_offset - mask_a_offset
+                assert have == want
+                assert mm.tell() == 0
+
+                have = mm.rfind(mask_b)
+                want = mask_b_offset - mask_a_offset
+                assert have == want
+                assert mm.tell() == 0
+
+                have = mm.rfind(mask_a, 0, 128)
+                want = 0
+                assert have == want
+                assert mm.tell() == 0
+
+            with unaligned_ro_mmap_open(f, file_sz) as mm:
+                have = mm.rfind(mask_a, 0, 128)
+                want = mask_a_offset
+                assert have == want
+                assert mm.tell() == 0
+
+
+class TestTypeofArg0:
+    def test_no_arguments(self):
+        def func():
+            pass
+
+        assert typeof_arg0(func) is None
+
+    def test_no_type_hint(self):
+        def func(arg):
+            return arg
+
+        assert typeof_arg0(func) is Any
+
+    def test_with_type_hint(self):
+        def func(arg: int):
+            return arg
+
+        assert typeof_arg0(func) is int
+
+    def test_multiple_arguments(self):
+        def func(arg1, arg2: str):
+            return (arg1, arg2)
+
+        assert typeof_arg0(func) is Any
+
+
+class Test_splitfn_chunk:
+    assert splitfn_chunk.__name__ == "splitfn_chunk"
+
+    @pytest.mark.parametrize("file_path,num_workers", list(itertools.product(files, [1, 32, 1024, 4096, 16384] + [os.path.getsize(f) for f in files])))
+    def test_default(self, file_path, num_workers):
+        file_sz = os.path.getsize(file_path)
+        chunks = splitfn_chunk(file_path, num_workers)
+
+        offsets, lengths = chunks[::2], chunks[1::2]
+        assert len(offsets) == num_workers
+        assert sorted(offsets) == list(offsets)
+        assert len(lengths) == num_workers
+        assert sum(lengths) == file_sz
+

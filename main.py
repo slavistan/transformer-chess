@@ -38,7 +38,7 @@ def filter_tan(tan_file: str, outcome_union_str: str, *, out_file=None, num_work
     outcome = san_chess.Outcome.from_union_string(outcome_union_str)
     print(f"{tan_file}, {out_file}, {outcome}, {num_workers=}")
 
-    split_fn = db_utils.splitfn_lines
+    split_fn = db_utils.splitfn_lines_sequential
     process_fn = db_utils.processfn_filter_by_outcome
     process_fn_extra_args = (outcome,)
     collect_fn = db_utils.make_collectfn_write(str(out_file))

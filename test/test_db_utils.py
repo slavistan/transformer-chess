@@ -36,7 +36,7 @@ def test_splitfn_lines(tmp_path: Path):
     p = tmp_path / "hello.txt"
     p.write_text(content, encoding="utf-8")
 
-    lines = db_utils.splitfn_lines(str(p))
+    lines = db_utils.splitfn_lines_sequential(str(p))
     pairs = [(lines[i], lines[i + 1]) for i in range(0, len(lines), 2)]
 
     print(content)
@@ -79,7 +79,7 @@ def test_parallel_process(tmp_path: Path):
     # Pseudo filter games (matching every game outcome). Check if all games are
     # returned.
     for num_workers in [1, 4, mp.cpu_count()]:
-        split_fn = db_utils.splitfn_lines
+        split_fn = db_utils.splitfn_lines_sequential
         process_fn = db_utils.processfn_filter_by_outcome
         process_fn_extra_args = (san_chess.Outcome.CHECKMATE | ~san_chess.Outcome.CHECKMATE,)
         collect_fn = db_utils.make_collectfn_write(str(out_path))

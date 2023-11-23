@@ -12,9 +12,10 @@ import torch
 import chess
 import multiprocessing as mp
 import psutil
-from typing import List, Dict, Tuple, Callable, Any, Collection, BinaryIO, Sequence
+from typing import List, Dict, Tuple, Callable, Any, Collection, BinaryIO, Sequence, Type
 from tqdm.auto import tqdm
 from src.san_chess import Outcome, get_outcome, SAN_ANNOTATION_POSTFIX
+from src.tools import typeof_arg0, RoUnalignedMMAP, unaligned_ro_mmap_open
 
 # String to array of ints.
 # def encode_tan_movechars(tan_movechars):
@@ -35,6 +36,7 @@ from src.san_chess import Outcome, get_outcome, SAN_ANNOTATION_POSTFIX
 #     filter_fn = (
 #         lambda tan_movetext: len(re.sub(re_rm_eog, "", tan_movetext)) - 2 <= width
 #     )
+
 
 def tan_gamelines_from_pgn_zstd(db_file: str, out_file: str | None = None):
     with open(db_file, "rb") as f_in:
@@ -84,21 +86,15 @@ _san_movetext_re = [
     #
     #   1. b4 { [%eval -0.46] } 1... d5 { [%eval -0.44] } 2. Bb2 ...
     re.compile(r"[1-9][0-9]*\.+\s?"),
-
     # Matches annotations in brackets {}.
     re.compile(r"\{[^}]*\}\s?"),
-
     # Matches move quality annotations such as blunders or brilliant moves, and
     # checks and checkmate indicators.
-    re.compile(f"[{SAN_ANNOTATION_POSTFIX}]")
+    re.compile(f"[{SAN_ANNOTATION_POSTFIX}]"),
 ]
 
-_san_movetext_eog_to_tan = {
-    "1-0": "W",
-    "0-1": "S",
-    "1/2-1/2": "U",
-    " *": "" # incomplete games are denoted by an asterisk
-}
+_san_movetext_eog_to_tan = {"1-0": "W", "0-1": "S", "1/2-1/2": "U", " *": ""}  # incomplete games are denoted by an asterisk
+
 
 def pgn_gameline_to_tan(san_gameline: str) -> str:
     """Converts a game's PGN's movetext (aka. gameline) to trimmed algebraic
@@ -111,7 +107,7 @@ def pgn_gameline_to_tan(san_gameline: str) -> str:
 
     for san_eog, tan_eog in _san_movetext_eog_to_tan.items():
         if san_gameline.endswith(san_eog):
-            san_gameline = san_gameline[:-len(san_eog)] + tan_eog
+            san_gameline = san_gameline[: -len(san_eog)] + tan_eog
             break
 
     return san_gameline
@@ -121,15 +117,22 @@ def tan_gamelines_from_pgn(line: str):
     pass
 
 
+# TODO: Parallel process nach tools verschieben
+SplitFn = Callable[[str], Sequence[int]]
+ProcessFn = Callable[[bytes | RoUnalignedMMAP, Tuple], Any | None]
+CollectFn = Callable[[List[List[Any]]], Any]
+
+
 def parallel_process(
     in_file: str,
-    split_fn: Callable[[str], Sequence[int]],
-    process_fn: Callable[[bytes, ...], Any],
-    collect_fn: Callable[[List[List[Any]]], Any],
+    # TODO: Offset-Größe Tuples erlauben (Callable[[str], Sequence[int] | Sequence[Tuple[int, int]]],
+    split_fn: SplitFn,
+    process_fn: ProcessFn,
+    collect_fn: CollectFn,
     *,
     process_fn_extra_args: Tuple = (),
-    num_workers: int=0,
-    quiet=False
+    num_workers: int = 0,
+    quiet: bool = False,
 ):
     if num_workers == 0:
         num_workers = mp.cpu_count()
@@ -138,7 +141,7 @@ def parallel_process(
     # and its size in bytes. For better data locality chunks should be sorted
     # by their offsets. Chunks don't have to be contiguous or non-overlapping.
     #
-    # Each pair of contiguous elements encodes one chunk. E.g.
+    # Each contiguous pair of elements encodes one chunk. E.g.
     #   [0, 14, 14, 7, 23, 4, 19, 4]
     #    ^  ^^
     #    ^  ^^~~~ size in bytes of chunk 0
@@ -146,19 +149,22 @@ def parallel_process(
     chunks_info = split_fn(in_file)
     num_chunks = len(chunks_info) // 2
 
-    # Construct parameters for worker function, made up of
     chunks_per_worker = math.ceil(num_chunks / num_workers)
-    worker_args: List[Tuple[str, Sequence[int], Callable[[bytes], Any], int]] = []
+    worker_args: List[Tuple[str, Sequence[int], ProcessFn, int, Tuple, bool]] = []
     for i in range(num_workers):
-        worker_chunks_info = chunks_info[i*chunks_per_worker*2:i*chunks_per_worker*2+chunks_per_worker*2]
-        worker_args.append((
-            in_file,               # file path
-            worker_chunks_info,    # chunks to be processed by the worker
-            process_fn,            # chunk processing function
-            i,                     # worker index
-            process_fn_extra_args, # additional arguments for processfn
-            quiet,                 # verbosity flag
-        ))
+        worker_chunks_info = chunks_info[i * chunks_per_worker * 2 : i * chunks_per_worker * 2 + chunks_per_worker * 2]
+        worker_args.append(
+            (
+                in_file,  # file path
+                worker_chunks_info,  # chunks to be processed by the worker
+                process_fn,  # chunk processing function
+                i,  # worker index
+                # TODO: Kann lokale Funktion mit Closure mglw. in temporäre Datei geschrieben werden?
+                #       nach Collect() kann diese wieder gelöscht werden. Mal testen.
+                process_fn_extra_args,  # additional arguments for processfn
+                quiet,  # verbosity flag
+            )
+        )
 
     # Start parallel processing and collect the results.
     with mp.get_context("spawn").Pool(num_workers) as p:
@@ -168,14 +174,7 @@ def parallel_process(
     collect_fn(worker_results)
 
 
-def worker(
-    in_file: str,
-    chunks_info: Sequence[int],
-    process_fn: Callable[[bytes, ...], Any],
-    worker_idx: int,
-    process_fn_extra_args: Tuple[Any],
-    quiet: bool
-) -> List[Any]:
+def worker(in_file: str, chunks_info: Sequence[int], process_fn: ProcessFn, worker_idx: int, process_fn_extra_args: Tuple[Any], quiet: bool) -> List[Any]:
     """
     Sequentially processes chunks of data from a file. This function is spawned
     by `parallel_process` and should not be called directly.
@@ -203,6 +202,13 @@ def worker(
             position=worker_idx,
         )
 
+    # Determine with which type of data process_fn will be called. Depending on
+    # the type of its first argument the chunks will be parsed as bytes or,
+    # alternatively, a read-only mmap-like object that covers the chunk will be
+    # passed. This is done to allow working with large chunks which don't fit
+    # in RAM.
+    process_chunks_as_bytes = typeof_arg0(process_fn) == bytes
+
     # Traverse and process chunks in order, collecting their results. If the
     # call to the chunk processing function returns None, the result is skipped
     # and not included into the worker's results list.
@@ -212,13 +218,15 @@ def worker(
     worker_result: List[Any] = []
     with open(in_file, "rb") as f:
         for i in range(0, len(chunks_info), 2):
-            offset, sz = chunks_info[i:i+2]
+            offset, sz = chunks_info[i : i + 2]
 
-            # TODO: Parameterize chunks as bytes or mmep'd io
-            #       Add parameter chunk_mmap: bool = False
-            f.seek(offset)
-            chunk_data = f.read(sz)
-            chunk_result = process_fn(chunk_data, *process_fn_extra_args)
+            if process_chunks_as_bytes:
+                f.seek(offset)
+                chunk_data = f.read(sz)
+                chunk_result = process_fn(chunk_data, *process_fn_extra_args)
+            else:
+                with unaligned_ro_mmap_open(f, sz, offset) as mm:
+                    chunk_result = process_fn(mm, *process_fn_extra_args)
             if chunk_result is not None:
                 worker_result.append(chunk_result)
 
@@ -239,7 +247,7 @@ def worker(
     return worker_result
 
 
-def splitfn_lines(in_file: str) -> array.ArrayType:
+def splitfn_lines_sequential(in_file: str) -> array.ArrayType:
     """Per line in a file returns the byte offset of the beginning of the line
     and its length. For performance reasons this function returns an
     array.array where every pair of items represents the above information for
@@ -247,12 +255,44 @@ def splitfn_lines(in_file: str) -> array.ArrayType:
 
     lines = array.array("Q")
     offset = 0
-    with open(in_file, 'rb') as file:
+    with open(in_file, "rb") as file:
         for line in file:
             line_sz = len(line)
             lines.extend((offset, line_sz))
             offset += line_sz
     return lines
+
+
+def splitfn_lines(in_file: str) -> array.ArrayType:
+    """Per line in a file returns the byte offset of the beginning of the line
+    and its length. For performance reasons this function returns an
+    array.array where every pair of items represents the above information for
+    one line."""
+
+    # splitfn -> chunks
+    #
+
+    lines = array.array("Q")
+    offset = 0
+    with open(in_file, "rb") as file:
+        for line in file:
+            line_sz = len(line)
+            lines.extend((offset, line_sz))
+            offset += line_sz
+    return lines
+
+
+def splitfn_chunk(in_file: str, num_workers: int) -> array.ArrayType:
+    file_sz = os.path.getsize(in_file)
+    chunk_sz = file_sz // num_workers
+    result = array.array("Q")
+
+    offset = 0
+    for _ in range(num_workers - 1):
+        result.extend((offset, chunk_sz))
+        offset += chunk_sz
+    result.extend((offset, file_sz - offset))
+    return result
 
 
 def processfn_filter_by_outcome(gameline_bytes: bytes, outcome: Outcome) -> str | None:
@@ -285,8 +325,8 @@ def make_collectfn_write(out_file: str, *, newline=True):
                     f.write(item)
                     if newline and not item.endswith("\n"):
                         f.write("\n")
-    return result_fn
 
+    return result_fn
 
 
 # def tan_to_tensor(
