@@ -55,7 +55,7 @@ def test_splitfn_lines(tmp_path: Path):
 def test_make_collectfn_write(tmp_path: Path):
     results = [["abc\n", "def", "ghi\n"], ["abc\n", "def", "ghi\n"], ["abc\n", "def", "ghi\n"]]
     out_path = tmp_path / "foo"
-    writefn = db_utils.make_collectfn_write(str(out_path), newline=True)
+    writefn = db_utils.make_writefn(str(out_path), newline=True)
     writefn(results)
 
     assert os.path.exists(str(out_path))
@@ -64,7 +64,7 @@ def test_make_collectfn_write(tmp_path: Path):
         assert lines == ["abc\n", "def\n", "ghi\n"] * 3
 
     out_path = tmp_path / "bar"
-    writefn = db_utils.make_collectfn_write(str(out_path), newline=False)
+    writefn = db_utils.make_writefn(str(out_path), newline=False)
     writefn(results)
 
     assert os.path.exists(str(out_path))
@@ -73,6 +73,8 @@ def test_make_collectfn_write(tmp_path: Path):
         assert lines == ["abc\n", "defghi\n"] * 3
 
 
+# TODO: das testet das Filtern von Spielen; auslagern
+#       parallel_process muss separat, mglw. mit Dummy fns getestet werden.
 def test_parallel_process(tmp_path: Path):
     out_path = tmp_path / "foo"
 
@@ -82,8 +84,16 @@ def test_parallel_process(tmp_path: Path):
         split_fn = db_utils.splitfn_lines_sequential
         process_fn = db_utils.processfn_filter_by_outcome
         process_fn_extra_args = (san_chess.Outcome.CHECKMATE | ~san_chess.Outcome.CHECKMATE,)
-        collect_fn = db_utils.make_collectfn_write(str(out_path))
-        db_utils.parallel_process("./data/example.tan", split_fn, process_fn, collect_fn, process_fn_extra_args=process_fn_extra_args, num_workers=num_workers, quiet=True)
+        collect_fn = db_utils.make_writefn(str(out_path))
+        db_utils.parallel_process(
+            "./data/example.tan",
+            split_fn,
+            process_fn,
+            collect_fn,
+            process_fn_extra_args=process_fn_extra_args,
+            num_workers=num_workers,
+            quiet=True,
+        )
 
         with open(str(out_path), "r") as new_f, open("./data/example.tan", "r") as f:
             games_new = sorted(list(new_f.readlines()))

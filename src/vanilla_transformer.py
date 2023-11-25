@@ -8,6 +8,7 @@ from src import san_chess
 from src.tools import count_lines_in_file, torch_elem_size
 from src.san_chess import SANPlayer
 import numpy as np
+from datetime import datetime
 import math
 from typing import Collection, List, Sequence
 
@@ -71,42 +72,28 @@ class Model(nn.Module):
         loss = F.cross_entropy(logits.reshape(B*T, C), y.reshape(B*T))
         return loss
 
-    def train_epoch(self, data_loader, *, eval_every=None, num_iteration=None):
-        for i, (x, y) in enumerate(data_loader, 0):
-            if num_iteration is not None and i >= num_iteration:
-                return
+    def train_epoch(self, data_loader, *, checkpoint_every=None, checkpt_dir="./models"):
+        """
+        Trains on data provided by a data loader.
+        """
+        batch_losses = []
+        def checkpoint():
+            nonlocal batch_losses
+            nonlocal batch_idx
+            loss_mean, loss_std = np.mean(batch_losses), np.std(batch_losses)
+            now = str(datetime.now())
+            print(f"Batch {batch_idx}: mean batch loss: {loss_mean} +- {loss_std}")
+            self.save(checkpt_dir + "/" + f"checkpt-{now}.pth")
+            batch_losses = []
 
-            num_games = 100
-            num_retries = 8
-            if eval_every is not None and i % eval_every == 0:
-                print(f"it {i-1} done: ", end="", flush=True)
-                print("batch loss = ", end="", flush=True)
-                loss_mean, loss_std = self.eval_loss(x, y)
-                print(f"{loss_mean:.4f}+-{loss_std:.4f}", end="", flush=True)
+        for batch_idx, (x, y) in enumerate(data_loader, 0):
+            loss = self.train_batch(x, y)
+            batch_losses.append(loss)
 
-                print(", self-play: ", end="", flush=True)
-                game_results = []
-                for i in range(num_games):
-                    p = TransformerPlayer(self)
-                    game_result = san_chess.play_game(p, num_retries=num_retries)
-                    game_results.append(game_result)
-                summary = san_chess.Game.summary(game_results)
-                print(f"num_moves={summary['num_moves_mean']}+-{summary['num_moves_std']:.4f} (retries {summary['num_retries_mean']:.4f}+-{summary['num_retries_std']:.4f})", end="", flush=True)
+            if checkpoint_every is not None and batch_idx % checkpoint_every == 0:
+                checkpoint()
+        checkpoint()
 
-                print(", vs-random: ", end="", flush=True)
-                game_results = []
-                for i in range(num_games):
-                    p = TransformerPlayer(self)
-                    p2 = san_chess.RandomPlayer()
-                    game_result = san_chess.play_game(p, p2, num_retries=(num_retries, 0))
-                    game_results.append(game_result)
-                summary = san_chess.Game.summary(game_results)
-                print(f"num_moves={summary['num_moves_mean']}+-{summary['num_moves_std']} (retries {summary['num_retries_white_mean']:.4f}+-{summary['num_retries_white_std']:.4f})", end="", flush=True)
-
-                print()
-
-
-            self.train_batch(x, y)
 
     def train_batch(self, x, y):
         """ Performes a single training step on batch data x, y """
@@ -183,6 +170,9 @@ class Model(nn.Module):
 
         return result
 
+
+    # @torch.no_grad()
+    # def eval_performance(self):
 
 class AttentionHead(nn.Module):
     """ Single head of masked self-attention """

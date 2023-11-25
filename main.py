@@ -41,7 +41,7 @@ def filter_tan(tan_file: str, outcome_union_str: str, *, out_file=None, num_work
     split_fn = db_utils.splitfn_lines_sequential
     process_fn = db_utils.processfn_filter_by_outcome
     process_fn_extra_args = (outcome,)
-    collect_fn = db_utils.make_collectfn_write(str(out_file))
+    collect_fn = db_utils.make_writefn(str(out_file))
     db_utils.parallel_process(tan_file, split_fn, process_fn, collect_fn, process_fn_extra_args=process_fn_extra_args, num_workers=num_workers, quiet=False)
 
 

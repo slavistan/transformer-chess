@@ -1,18 +1,32 @@
 from __future__ import annotations
+from itertools import accumulate
 import os
 import itertools
+import array
 import pytest
+import multiprocessing as mp
 from typing import Callable, Type, Any
 import pytest
 from src.tools import *
-from src.db_utils import splitfn_chunk
+from src.db_utils import splitfn_chunk, processfn_find_lines, collectfn_get_lines, splitfn_lines
 
-utf8_file = "test/assets/utf-8.txt"  # small file (581 bytes) fitting into a single page
-pgn_file = "data/example.pgn"  # large file (1140613 bytes) spanning multiple pages
+utf8_file = "test/assets/utf-8.txt"
+assert os.path.getsize(utf8_file) == 581  # single page
+empty_file = "./test/assets/empty.txt"
+assert os.path.getsize(empty_file) == 0
+pgn_file = "data/example.pgn"
+assert os.path.getsize(pgn_file) == 1140613  # multi page
 files = [utf8_file, pgn_file]
+files0 = files + [empty_file]
 
 
 class TestUnalignedRoMmapOpen:
+    def test_map_empty_file(self):
+        with pytest.raises(ValueError):
+            file_sz = os.path.getsize(empty_file)
+            with unaligned_ro_mmap_open(empty_file, file_sz):
+                pass
+
     @pytest.mark.parametrize("file_path", files)
     def test_map_full_file_read_all(self, file_path: str):
         """Mapping the full file should yield the same result as reading the file."""
@@ -234,37 +248,11 @@ class TestUnalignedRoMmapOpen:
                 assert mm.tell() == 0
 
 
-class TestTypeofArg0:
-    def test_no_arguments(self):
-        def func():
-            pass
-
-        assert typeof_arg0(func) is None
-
-    def test_no_type_hint(self):
-        def func(arg):
-            return arg
-
-        assert typeof_arg0(func) is Any
-
-    def test_with_type_hint(self):
-        def func(arg: int):
-            return arg
-
-        assert typeof_arg0(func) is int
-
-    def test_multiple_arguments(self):
-        def func(arg1, arg2: str):
-            return (arg1, arg2)
-
-        assert typeof_arg0(func) is Any
-
-
 class Test_splitfn_chunk:
     assert splitfn_chunk.__name__ == "splitfn_chunk"
 
-    @pytest.mark.parametrize("file_path,num_workers", list(itertools.product(files, [1, 32, 1024, 4096, 16384] + [os.path.getsize(f) for f in files])))
-    def test_default(self, file_path, num_workers):
+    @pytest.mark.parametrize("file_path,num_workers", list(itertools.product(files + [empty_file], list(range(1, mp.cpu_count())) + [1024, 4096, 16384] + [os.path.getsize(f) for f in files])))
+    def test_happy_path(self, file_path, num_workers):
         file_sz = os.path.getsize(file_path)
         chunks = splitfn_chunk(file_path, num_workers)
 
@@ -274,3 +262,307 @@ class Test_splitfn_chunk:
         assert len(lengths) == num_workers
         assert sum(lengths) == file_sz
 
+
+class Test_processfn_find_lines:
+    assert processfn_find_lines.__name__ == "processfn_find_lines"
+
+    @pytest.mark.parametrize("file_path", files + [empty_file])
+    def test_happy_path(self, file_path):
+        with open(file_path, "rb") as f, open(file_path, "rb") as f2:
+            file_sz = os.path.getsize(file_path)
+            lines_info, _ = processfn_find_lines(f)
+            lines = f2.readlines()
+
+            offsets, lengths = list(lines_info[::2]), list(lines_info[1::2])
+            assert len(offsets) == len(lengths)
+            assert len(offsets) == len(lines)
+            assert all([l > 0 for l in lengths])
+            assert sum(lengths) == file_sz
+            assert sorted(offsets) == offsets
+
+            offset = 0
+            for i, line in enumerate(lines):
+                assert offsets[i] == offset
+                assert lengths[i] == len(line)
+                offset += len(line)
+
+    def test_newline(self):
+        with unaligned_ro_mmap_open(utf8_file, 52, 2 * 52) as mm:
+            lines_info_arr, ends_in_newline = processfn_find_lines(mm)
+            assert ends_in_newline
+            have_lengths = list(lines_info_arr[1::2])
+            want_lengths = [51, 1]
+            assert have_lengths == want_lengths
+
+
+class Test_collectfn_get_lines:
+    assert collectfn_get_lines.__name__ == "collectfn_get_lines"
+
+    @staticmethod
+    def expand(lines_info):
+        """
+        Expands tests data representing lines only as their lengths, to match
+        the input of a CollectFn. Distinguishes between line lengths with the
+        end-of-line flag or simple line lengths used to expand the expected
+        outputs.
+        """
+
+        result = []
+        if isinstance(lines_info[0], tuple):
+            for lengths, ends_in_newline in lines_info:
+                offsets = accumulate(lengths, initial=0)
+                # interweave offsets and lengths to arrive at out required
+                # format.
+                encoded = [val for pair in zip(offsets, lengths) for val in pair]
+                result.append([(array.array("Q", encoded), ends_in_newline)])
+        else:
+            offsets = accumulate(lines_info, initial=0)
+            result = [val for pair in zip(offsets, lines_info) for val in pair]
+        return result
+
+    # Legend:
+    #   | chunk boundaries
+    #   n newline
+    #   ! newline on chunk boundary
+    def test_default(self):
+        # |----|
+        lengths = [
+            ([10], False),
+        ]
+        chunk_results = Test_collectfn_get_lines.expand(lengths)
+        have = list(collectfn_get_lines(chunk_results))
+        want = [10]
+        assert have == Test_collectfn_get_lines.expand(want)
+
+        # |----!
+        lengths = [
+            ([10], False),
+        ]
+        chunk_results = Test_collectfn_get_lines.expand(lengths)
+        have = list(collectfn_get_lines(chunk_results))
+        want = [10]
+        assert have == Test_collectfn_get_lines.expand(want)
+
+        # |--n-|
+        lengths = [
+            ([10, 5], False),
+        ]
+        chunk_results = Test_collectfn_get_lines.expand(lengths)
+        have = list(collectfn_get_lines(chunk_results))
+        want = [10, 5]
+        assert have == Test_collectfn_get_lines.expand(want)
+
+        # |--n-!
+        lengths = [
+            ([10, 5], True),
+        ]
+        chunk_results = Test_collectfn_get_lines.expand(lengths)
+        have = list(collectfn_get_lines(chunk_results))
+        want = [10, 5]
+        assert have == Test_collectfn_get_lines.expand(want)
+
+        # |-n-n-!
+        lengths = [
+            ([5, 5, 5], True),
+        ]
+        chunk_results = Test_collectfn_get_lines.expand(lengths)
+        have = list(collectfn_get_lines(chunk_results))
+        want = [5, 5, 5]
+        assert have == Test_collectfn_get_lines.expand(want)
+
+        # |-n-|-n-|
+        lengths = [
+            ([5, 5], False),
+            ([3, 3], False),
+        ]
+        chunk_results = Test_collectfn_get_lines.expand(lengths)
+        have = list(collectfn_get_lines(chunk_results))
+        want = [5, 8, 3]
+        assert have == Test_collectfn_get_lines.expand(want)
+
+        # |-n-!-n-|
+        lengths = [
+            ([5, 5], True),
+            ([3, 3], False),
+        ]
+        chunk_results = Test_collectfn_get_lines.expand(lengths)
+        have = list(collectfn_get_lines(chunk_results))
+        want = [5, 5, 3, 3]
+        assert have == Test_collectfn_get_lines.expand(want)
+
+        # |-n-!-n-!
+        lengths = [
+            ([5, 5], True),
+            ([3, 3], True),
+        ]
+        chunk_results = Test_collectfn_get_lines.expand(lengths)
+        have = list(collectfn_get_lines(chunk_results))
+        want = [5, 5, 3, 3]
+        assert have == Test_collectfn_get_lines.expand(want)
+
+        # |---!-n-!
+        lengths = [
+            ([5], True),
+            ([3, 3], True),
+        ]
+        chunk_results = Test_collectfn_get_lines.expand(lengths)
+        have = list(collectfn_get_lines(chunk_results))
+        want = [5, 3, 3]
+        assert have == Test_collectfn_get_lines.expand(want)
+
+        # |-n-|---|
+        lengths = [
+            ([3, 4], False),
+            ([5], False),
+        ]
+        chunk_results = Test_collectfn_get_lines.expand(lengths)
+        have = list(collectfn_get_lines(chunk_results))
+        want = [3, 9]
+        assert have == Test_collectfn_get_lines.expand(want)
+
+        # |-n-!---|
+        lengths = [
+            ([3, 4], True),
+            ([5], False),
+        ]
+        chunk_results = Test_collectfn_get_lines.expand(lengths)
+        have = list(collectfn_get_lines(chunk_results))
+        want = [3, 4, 5]
+        assert have == Test_collectfn_get_lines.expand(want)
+
+        # |-n-!---!
+        lengths = [
+            ([3, 4], True),
+            ([5], True),
+        ]
+        chunk_results = Test_collectfn_get_lines.expand(lengths)
+        have = list(collectfn_get_lines(chunk_results))
+        want = [3, 4, 5]
+        assert have == Test_collectfn_get_lines.expand(want)
+
+        # |-n-|---|--n-|
+        lengths = [
+            ([3, 4], False),
+            ([5], False),
+            ([6, 7], False),
+        ]
+        chunk_results = Test_collectfn_get_lines.expand(lengths)
+        have = list(collectfn_get_lines(chunk_results))
+        want = [3, 15, 7]
+        assert have == Test_collectfn_get_lines.expand(want)
+
+        # |-n-|---!--n-|
+        lengths = [
+            ([3, 4], False),
+            ([5], True),
+            ([6, 7], False),
+        ]
+        chunk_results = Test_collectfn_get_lines.expand(lengths)
+        have = list(collectfn_get_lines(chunk_results))
+        want = [3, 9, 6, 7]
+        assert have == Test_collectfn_get_lines.expand(want)
+
+        # |-n-n-|---|-n-n-|
+        lengths = [
+            ([1, 2, 3], False),
+            ([4], False),
+            ([5, 6, 7], False),
+        ]
+        chunk_results = Test_collectfn_get_lines.expand(lengths)
+        have = list(collectfn_get_lines(chunk_results))
+        want = [1, 2, 12, 6, 7]
+        assert have == Test_collectfn_get_lines.expand(want)
+
+        # |-n-n-|---|---|-n-n-|
+        lengths = [
+            ([1, 2, 3], False),
+            ([4], False),
+            ([5], False),
+            ([6, 7, 8], False),
+        ]
+        chunk_results = Test_collectfn_get_lines.expand(lengths)
+        have = list(collectfn_get_lines(chunk_results))
+        want = [1, 2, 3 + 4 + 5 + 6, 7, 8]
+        assert have == Test_collectfn_get_lines.expand(want)
+
+        # |-n-n-|---|---!-n-n-|
+        lengths = [
+            ([1, 2, 3], False),
+            ([4], False),
+            ([5], True),
+            ([6, 7, 8], False),
+        ]
+        chunk_results = Test_collectfn_get_lines.expand(lengths)
+        have = list(collectfn_get_lines(chunk_results))
+        want = [1, 2, 3 + 4 + 5, 6, 7, 8]
+        assert have == Test_collectfn_get_lines.expand(want)
+
+        # |-n-n-|---!---|-n-n-|
+        lengths = [
+            ([1, 2, 3], False),
+            ([4], True),
+            ([5], False),
+            ([6, 7, 8], False),
+        ]
+        chunk_results = Test_collectfn_get_lines.expand(lengths)
+        have = list(collectfn_get_lines(chunk_results))
+        want = [1, 2, 3 + 4, 5 + 6, 7, 8]
+        assert have == Test_collectfn_get_lines.expand(want)
+
+        # |--!!|
+        lengths = [
+            ([2], True),
+            ([1], True),
+            ([1], False),
+        ]
+        chunk_results = Test_collectfn_get_lines.expand(lengths)
+        have = list(collectfn_get_lines(chunk_results))
+        want = [2, 1, 1]
+        assert have == Test_collectfn_get_lines.expand(want)
+
+        # |--||
+        lengths = [
+            ([2], False),
+            ([1], False),
+        ]
+        chunk_results = Test_collectfn_get_lines.expand(lengths)
+        have = list(collectfn_get_lines(chunk_results))
+        want = [3]
+        assert have == Test_collectfn_get_lines.expand(want)
+
+        # |--|||--|-|
+        lengths = [
+            ([2], False),
+            ([1], False),
+            ([1], False),
+            ([2], False),
+            ([2], False),
+        ]
+        chunk_results = Test_collectfn_get_lines.expand(lengths)
+        have = list(collectfn_get_lines(chunk_results))
+        want = [8]
+        assert have == Test_collectfn_get_lines.expand(want)
+
+
+class Test_splitfn_lines:
+    assert splitfn_lines.__name__ == "splitfn_lines"
+
+    num_workers = set([1, 2, 4, mp.cpu_count(), mp.cpu_count() + 1])
+
+    @pytest.mark.parametrize("num_workers", num_workers)
+    def test_empty_file(self, num_workers):
+        lines_info_arr = splitfn_lines(empty_file, num_workers=num_workers, quiet=True)
+        have_lengths = list(lines_info_arr[1::2])
+        want_lengths = []
+        assert want_lengths == have_lengths
+
+    @pytest.mark.parametrize("file_path,num_workers", list(itertools.product(files, num_workers)))
+    def test_default(self, file_path, num_workers):
+        with open(file_path, "rb") as f:
+            lines = f.readlines()
+
+        lines_info_arr = splitfn_lines(file_path, num_workers=num_workers, quiet=True)
+        have = list(lines_info_arr[1::2])
+        want = [len(l) for l in lines]
+        assert len(have) == len(have)
+        assert have == want

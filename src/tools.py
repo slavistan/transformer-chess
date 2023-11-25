@@ -28,29 +28,6 @@ def torch_elem_size(dtype: torch.dtype) -> int:
     return t.element_size()
 
 
-def typeof_arg0(fn: Callable) -> Type | None:
-    """
-    Get the type hint of the first argument of a function.
-
-    Args:
-        fn (Callable): The function to inspect.
-
-    Returns:
-        Type | None: The type hint of the first argument, `None` if function
-                     takes no arguments or typing.Any if the first argument does not have
-                     any type annotation.
-    """
-    signature = inspect.signature(fn)
-    parameters = signature.parameters
-    if parameters:
-        param_type = Any  # Default to Any if type hint is not present
-        first_param = next(iter(parameters.values()))
-        if first_param.annotation != inspect.Parameter.empty:
-            param_type = first_param.annotation
-        return param_type
-    return
-
-
 @contextlib.contextmanager
 def unaligned_ro_mmap_open(input_file: Union[str, IO], length: int, offset: int = 0):
     """

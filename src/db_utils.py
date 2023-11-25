@@ -15,7 +15,7 @@ import psutil
 from typing import List, Dict, Tuple, Callable, Any, Collection, BinaryIO, Sequence, Type
 from tqdm.auto import tqdm
 from src.san_chess import Outcome, get_outcome, SAN_ANNOTATION_POSTFIX
-from src.tools import typeof_arg0, RoUnalignedMMAP, unaligned_ro_mmap_open
+from src.tools import RoUnalignedMMAP, unaligned_ro_mmap_open
 
 # String to array of ints.
 # def encode_tan_movechars(tan_movechars):
@@ -132,7 +132,8 @@ def parallel_process(
     *,
     process_fn_extra_args: Tuple = (),
     num_workers: int = 0,
-    quiet: bool = False,
+    quiet=False,
+    mmap_mode=False,
 ):
     if num_workers == 0:
         num_workers = mp.cpu_count()
@@ -150,7 +151,7 @@ def parallel_process(
     num_chunks = len(chunks_info) // 2
 
     chunks_per_worker = math.ceil(num_chunks / num_workers)
-    worker_args: List[Tuple[str, Sequence[int], ProcessFn, int, Tuple, bool]] = []
+    worker_args: List[Tuple[str, Sequence[int], ProcessFn, int, Tuple, bool, bool]] = []
     for i in range(num_workers):
         worker_chunks_info = chunks_info[i * chunks_per_worker * 2 : i * chunks_per_worker * 2 + chunks_per_worker * 2]
         worker_args.append(
@@ -163,6 +164,7 @@ def parallel_process(
                 #       nach Collect() kann diese wieder gelöscht werden. Mal testen.
                 process_fn_extra_args,  # additional arguments for processfn
                 quiet,  # verbosity flag
+                mmap_mode,
             )
         )
 
@@ -171,10 +173,19 @@ def parallel_process(
         worker_results: List[List[Any]] = p.starmap(worker, worker_args)
 
     # Process the results.
-    collect_fn(worker_results)
+    result = collect_fn(worker_results)
+    return result
 
 
-def worker(in_file: str, chunks_info: Sequence[int], process_fn: ProcessFn, worker_idx: int, process_fn_extra_args: Tuple[Any], quiet: bool) -> List[Any]:
+def worker(
+    in_file: str,
+    chunks_info: Sequence[int],
+    process_fn: ProcessFn,
+    worker_idx: int,
+    process_fn_extra_args: Tuple[Any],
+    quiet: bool,
+    mmap_mode: bool,
+) -> List[Any]:
     """
     Sequentially processes chunks of data from a file. This function is spawned
     by `parallel_process` and should not be called directly.
@@ -202,13 +213,6 @@ def worker(in_file: str, chunks_info: Sequence[int], process_fn: ProcessFn, work
             position=worker_idx,
         )
 
-    # Determine with which type of data process_fn will be called. Depending on
-    # the type of its first argument the chunks will be parsed as bytes or,
-    # alternatively, a read-only mmap-like object that covers the chunk will be
-    # passed. This is done to allow working with large chunks which don't fit
-    # in RAM.
-    process_chunks_as_bytes = typeof_arg0(process_fn) == bytes
-
     # Traverse and process chunks in order, collecting their results. If the
     # call to the chunk processing function returns None, the result is skipped
     # and not included into the worker's results list.
@@ -220,13 +224,13 @@ def worker(in_file: str, chunks_info: Sequence[int], process_fn: ProcessFn, work
         for i in range(0, len(chunks_info), 2):
             offset, sz = chunks_info[i : i + 2]
 
-            if process_chunks_as_bytes:
+            if mmap_mode:
+                with unaligned_ro_mmap_open(f, sz, offset) as mm:
+                    chunk_result = process_fn(mm, *process_fn_extra_args)
+            else:
                 f.seek(offset)
                 chunk_data = f.read(sz)
                 chunk_result = process_fn(chunk_data, *process_fn_extra_args)
-            else:
-                with unaligned_ro_mmap_open(f, sz, offset) as mm:
-                    chunk_result = process_fn(mm, *process_fn_extra_args)
             if chunk_result is not None:
                 worker_result.append(chunk_result)
 
@@ -263,23 +267,34 @@ def splitfn_lines_sequential(in_file: str) -> array.ArrayType:
     return lines
 
 
-def splitfn_lines(in_file: str) -> array.ArrayType:
+def splitfn_lines(
+    in_file: str,
+    *,
+    quiet=False,
+    num_workers=mp.cpu_count(),
+) -> array.ArrayType:
     """Per line in a file returns the byte offset of the beginning of the line
     and its length. For performance reasons this function returns an
     array.array where every pair of items represents the above information for
     one line."""
 
-    # splitfn -> chunks
-    #
+    # Fast path for empty files which can't be mmaped.
+    if os.path.getsize(in_file) == 0:
+        return array.array("Q")
 
-    lines = array.array("Q")
-    offset = 0
-    with open(in_file, "rb") as file:
-        for line in file:
-            line_sz = len(line)
-            lines.extend((offset, line_sz))
-            offset += line_sz
-    return lines
+    def split_fn(in_file: str) -> array.ArrayType:
+        return splitfn_chunk(in_file, num_workers)
+
+    result = parallel_process(
+        in_file,
+        split_fn=split_fn,
+        process_fn = processfn_find_lines,
+        collect_fn = collectfn_get_lines,
+        mmap_mode=True,
+        quiet=quiet,
+        num_workers=num_workers,
+    )
+    return result
 
 
 def splitfn_chunk(in_file: str, num_workers: int) -> array.ArrayType:
@@ -295,6 +310,35 @@ def splitfn_chunk(in_file: str, num_workers: int) -> array.ArrayType:
     return result
 
 
+def processfn_find_lines(buf: io.BytesIO) -> Tuple[array.ArrayType, bool]:
+    """
+    Process the given buffer to find lines and their corresponding offsets.
+
+    Args:
+        buf (io.BytesIO): The buffer to process.
+
+    Returns:
+        Tuple[array.ArrayType, bool]: A tuple containing the lines information
+        and a boolean indicating whether the last line ends with a newline
+        character.
+
+        Lines information is encoded in array.array("Q"), where every contiguous
+        pair of elements encode the offset and size of one line.
+    """
+    lines_info = array.array("Q")
+    line_prev = b""
+    line = b""
+    while True:
+        offset = buf.tell()
+        line_prev = buf.readline()
+        if not line_prev:
+            break
+        line = line_prev
+        lines_info.extend((offset, len(line)))
+
+    return lines_info, line.endswith(b"\n")
+
+
 def processfn_filter_by_outcome(gameline_bytes: bytes, outcome: Outcome) -> str | None:
     """Chunk processing function filtering games by outcome. Returns gameline
     as string if outcome matches game. Returns None otherwise."""
@@ -304,9 +348,9 @@ def processfn_filter_by_outcome(gameline_bytes: bytes, outcome: Outcome) -> str 
         return gameline
 
 
-def make_collectfn_write(out_file: str, *, newline=True):
+def make_writefn(out_file: str, *, newline=True) -> CollectFn:
     """
-    Returns a function that writes a list of lists of strings to a file.
+    Returns a CollectFn that writes its inputs to file.
 
     Args:
         out_file: The path to the output file.
@@ -328,6 +372,60 @@ def make_collectfn_write(out_file: str, *, newline=True):
 
     return result_fn
 
+
+def collectfn_get_lines(workers_results: List[List[Tuple[array.ArrayType, bool]]]) -> array.ArrayType:
+    """Collect function for splitfn_chunk, processfn_find_lines"""
+
+    lengths = array.array("Q")
+    num_chunks = len(workers_results)  # one chunk per worker
+    skip = False
+    chunk_idx = 0
+    while chunk_idx < num_chunks:
+        lines_info_arr, last_seg_ends_in_newline = workers_results[chunk_idx][0]
+        # Parse all but last segment in chunk, skipping the first, if we
+        # have already manually parsed it before.
+        for length in lines_info_arr[skip*2+1:-2:2]:
+            lengths.append(length)
+
+        # Parse the last segment in the chunk. If it ends in a newline, read it
+        # and jump back to the beginning. Trivial case. Also quit if we've
+        # reached the final segment.
+        length = lines_info_arr[-1]
+        if last_seg_ends_in_newline or chunk_idx == num_chunks-1:
+            lengths.append(length)
+            skip = False
+            chunk_idx += 1
+            continue
+
+        # Keep eating single-segment infix chunks until we reach the end of a
+        # line or the chunks.
+        while True:
+            chunk_idx += 1
+            lines_info_arr, last_seg_ends_in_newline = workers_results[chunk_idx][0]
+            num_segs_in_chunk = len(lines_info_arr)//2
+            if num_segs_in_chunk == 1:
+                length += lines_info_arr[1]
+                if last_seg_ends_in_newline or chunk_idx == num_chunks-1:
+                    lengths.append(length)
+                    skip = False
+                    chunk_idx += 1
+                    break
+                else:
+                    continue
+            else:
+                # If chunk has multiple segments, eat the first, set skip and
+                # continue.
+                length += lines_info_arr[1]
+                lengths.append(length)
+                skip = True
+                break
+
+    result = array.array("Q")
+    offset = 0
+    for l in lengths:
+        result.extend((offset, l))
+        offset += l
+    return result
 
 # def tan_to_tensor(
 #     tan_file_path,
