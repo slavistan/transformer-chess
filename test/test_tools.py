@@ -2,13 +2,14 @@ from __future__ import annotations
 from itertools import accumulate
 import os
 import itertools
+from pathlib import Path
 import array
 import pytest
 import multiprocessing as mp
 from typing import Callable, Type, Any
 import pytest
 from src.tools import *
-from src.db_utils import splitfn_chunk, processfn_find_lines, collectfn_get_lines, splitfn_lines
+from src.db_utils import splitfn_chunk, processfn_find_lines, collectfn_get_lines, splitfn_lines, pgn_to_tan, pgn_gameline_to_tan
 
 utf8_file = "test/assets/utf-8.txt"
 assert os.path.getsize(utf8_file) == 581  # single page
@@ -20,7 +21,9 @@ files = [utf8_file, pgn_file]
 files0 = files + [empty_file]
 
 
-class TestUnalignedRoMmapOpen:
+class Test_unaligned_ro_mmap_open:
+    assert unaligned_ro_mmap_open.__name__ == "unaligned_ro_mmap_open"
+
     def test_map_empty_file(self):
         with pytest.raises(ValueError):
             file_sz = os.path.getsize(empty_file)
@@ -566,3 +569,22 @@ class Test_splitfn_lines:
         want = [len(l) for l in lines]
         assert len(have) == len(have)
         assert have == want
+
+class Test_pgn_to_tan:
+    assert pgn_to_tan.__name__ == "pgn_to_tan"
+
+    @pytest.mark.parametrize("num_workers", [1, 2, 11, mp.cpu_count()])
+    def test_default(self, num_workers, tmp_path: Path):
+        with open(pgn_file, "r") as f:
+            pgn_gamelines = [l for l in f.readlines() if l.startswith("1")]
+            tan_gamelines = [pgn_gameline_to_tan(l) + "\n" for l in pgn_gamelines]
+
+        out_file = str(tmp_path / "out.pgn")
+        pgn_to_tan(pgn_file, out_file=out_file, parallel_process_args={"num_workers": num_workers, "quiet": True})
+        with open(out_file, "r") as f:
+            have = f.readlines()
+        want = tan_gamelines
+
+        assert len(want) == len(have)
+        assert want == have
+

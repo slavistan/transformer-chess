@@ -94,6 +94,9 @@ class Outcome(enum.Flag):
     """See corresponding PlayerSignal."""
 
     # Aliases to define comfy helpers.
+    # TODO: Any von Hand implementieren, mit Test festzurren, dass alle canonicals enthalten sind.
+    # ANY = ...
+
     WHITE_WINS = \
         WHITE_WINS_CHECKMATE | \
         WHITE_WINS_DISQUALIFICATION | \

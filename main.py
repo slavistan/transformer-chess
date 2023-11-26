@@ -5,14 +5,25 @@ from typing import Literal
 import torch
 import multiprocessing as mp
 import time
+import logging
 
 import clize
 
 from src import db_utils, san_chess, vanilla_transformer
 
+logging.basicConfig()
+logging.getLogger().setLevel(logging.INFO)
+
+def count_lines(in_file: str, *, num_workers=mp.cpu_count(), verbose=False):
+    if num_workers <= 0:
+        num_workers = mp.cpu_count()
+
+    line_info_arr = db_utils.splitfn_lines(in_file, num_workers=num_workers, quiet=not verbose)
+    print(len(line_info_arr)//2)
+
 
 # TODO: Implement; Create splitfn, processfn, and collectfn
-def pgn_to_tan(pgn_file: str, *, out_file=None, num_workers=None):
+def pgn_to_tan(pgn_file: str, *, out_file=None, num_workers=None, outcome: str):
     """Extracts gamelines from a pgn database and converts them to tan format.
 
     :param pgn_file: Path fo file containing games.
@@ -79,5 +90,6 @@ if __name__ == "__main__":
             filter_tan.__name__: filter_tan,
             pgn_to_tan.__name__: pgn_to_tan,
             play_model.__name__: play_model,
+            count_lines.__name__: count_lines,
         }
     )

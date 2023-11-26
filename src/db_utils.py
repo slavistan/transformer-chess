@@ -11,6 +11,7 @@ import math
 import torch
 import chess
 import multiprocessing as mp
+import logging
 import psutil
 from typing import List, Dict, Tuple, Callable, Any, Collection, BinaryIO, Sequence, Type
 from tqdm.auto import tqdm
@@ -79,6 +80,7 @@ def tan_gamelines_from_pgn_zstd(db_file: str, out_file: str | None = None):
 
 #                 data[i, 1 : len(tokens) + 1] = tokens
 
+
 _san_movetext_re = [
     # Matches move indices. In addition to regular move indices, some moves
     # are annotated with engine evaluations and use use a triple period to
@@ -113,8 +115,14 @@ def pgn_gameline_to_tan(san_gameline: str) -> str:
     return san_gameline
 
 
-def tan_gamelines_from_pgn(line: str):
-    pass
+def pgn_to_tan(pgn_file: str, out_file: str, parallel_process_args={}):
+    return parallel_process(
+        pgn_file,
+        split_fn=splitfn_pgn_gameslines,
+        process_fn=processfn_pgn_gameline_to_tan,
+        collect_fn=make_writefn(out_file),
+        **parallel_process_args,
+    )
 
 
 # TODO: Parallel process nach tools verschieben
@@ -134,6 +142,7 @@ def parallel_process(
     num_workers: int = 0,
     quiet=False,
     mmap_mode=False,
+    logger=logging.getLogger(),
 ):
     if num_workers == 0:
         num_workers = mp.cpu_count()
@@ -147,9 +156,12 @@ def parallel_process(
     #    ^  ^^
     #    ^  ^^~~~ size in bytes of chunk 0
     #    ^~~~~~~~ offset in bytes of chunk 0
+    logger.info(f"{parallel_process.__name__}: Calling splitfn ...")
     chunks_info = split_fn(in_file)
+    logger.info(f"{parallel_process.__name__}: done.")
     num_chunks = len(chunks_info) // 2
 
+    logger.info(f"{parallel_process.__name__}: Preparing workers' data ...")
     chunks_per_worker = math.ceil(num_chunks / num_workers)
     worker_args: List[Tuple[str, Sequence[int], ProcessFn, int, Tuple, bool, bool]] = []
     for i in range(num_workers):
@@ -167,13 +179,18 @@ def parallel_process(
                 mmap_mode,
             )
         )
+    logger.info(f"{parallel_process.__name__}: done.")
 
     # Start parallel processing and collect the results.
+    logger.info(f"{parallel_process.__name__}: Starting parallel processing with {num_workers} workers ...")
     with mp.get_context("spawn").Pool(num_workers) as p:
         worker_results: List[List[Any]] = p.starmap(worker, worker_args)
+    logger.info(f"{parallel_process.__name__}: done.")
 
     # Process the results.
+    logger.info(f"{parallel_process.__name__}: Calling collectfn ...")
     result = collect_fn(worker_results)
+    logger.info(f"{parallel_process.__name__}: done.")
     return result
 
 
@@ -288,8 +305,8 @@ def splitfn_lines(
     result = parallel_process(
         in_file,
         split_fn=split_fn,
-        process_fn = processfn_find_lines,
-        collect_fn = collectfn_get_lines,
+        process_fn=processfn_find_lines,
+        collect_fn=collectfn_get_lines,
         mmap_mode=True,
         quiet=quiet,
         num_workers=num_workers,
@@ -307,6 +324,21 @@ def splitfn_chunk(in_file: str, num_workers: int) -> array.ArrayType:
         result.extend((offset, chunk_sz))
         offset += chunk_sz
     result.extend((offset, file_sz - offset))
+    return result
+
+
+def splitfn_pgn_gameslines(in_file: str) -> array.ArrayType:
+    # TODO: Write test
+    result = array.array("Q")
+    with open(in_file, "rb") as f:
+        offset = f.tell()
+        line = f.readline()
+        while line:
+            if line.startswith(b"1"):
+                result.extend((offset, len(line)))
+            offset = f.tell()
+            line = f.readline()
+
     return result
 
 
@@ -348,6 +380,10 @@ def processfn_filter_by_outcome(gameline_bytes: bytes, outcome: Outcome) -> str 
         return gameline
 
 
+def processfn_pgn_gameline_to_tan(gameline: bytes) -> str:
+    return pgn_gameline_to_tan(gameline.decode("utf-8"))
+
+
 def make_writefn(out_file: str, *, newline=True) -> CollectFn:
     """
     Returns a CollectFn that writes its inputs to file.
@@ -362,7 +398,10 @@ def make_writefn(out_file: str, *, newline=True) -> CollectFn:
 
     # TODO: add option to filter out duplicates
     def result_fn(results: List[List[str]]):
-        os.makedirs(os.path.dirname(out_file), mode=0o755, exist_ok=True)
+        nonlocal out_file
+        nonlocal newline
+        abs_path = os.path.abspath(out_file)
+        os.makedirs(os.path.dirname(abs_path), mode=0o755, exist_ok=True)
         with open(out_file, "w") as f:
             for worker_results in results:
                 for item in worker_results:
@@ -384,14 +423,14 @@ def collectfn_get_lines(workers_results: List[List[Tuple[array.ArrayType, bool]]
         lines_info_arr, last_seg_ends_in_newline = workers_results[chunk_idx][0]
         # Parse all but last segment in chunk, skipping the first, if we
         # have already manually parsed it before.
-        for length in lines_info_arr[skip*2+1:-2:2]:
+        for length in lines_info_arr[skip * 2 + 1 : -2 : 2]:
             lengths.append(length)
 
         # Parse the last segment in the chunk. If it ends in a newline, read it
         # and jump back to the beginning. Trivial case. Also quit if we've
         # reached the final segment.
         length = lines_info_arr[-1]
-        if last_seg_ends_in_newline or chunk_idx == num_chunks-1:
+        if last_seg_ends_in_newline or chunk_idx == num_chunks - 1:
             lengths.append(length)
             skip = False
             chunk_idx += 1
@@ -402,10 +441,10 @@ def collectfn_get_lines(workers_results: List[List[Tuple[array.ArrayType, bool]]
         while True:
             chunk_idx += 1
             lines_info_arr, last_seg_ends_in_newline = workers_results[chunk_idx][0]
-            num_segs_in_chunk = len(lines_info_arr)//2
+            num_segs_in_chunk = len(lines_info_arr) // 2
             if num_segs_in_chunk == 1:
                 length += lines_info_arr[1]
-                if last_seg_ends_in_newline or chunk_idx == num_chunks-1:
+                if last_seg_ends_in_newline or chunk_idx == num_chunks - 1:
                     lengths.append(length)
                     skip = False
                     chunk_idx += 1
@@ -426,6 +465,7 @@ def collectfn_get_lines(workers_results: List[List[Tuple[array.ArrayType, bool]]
         result.extend((offset, l))
         offset += l
     return result
+
 
 # def tan_to_tensor(
 #     tan_file_path,
