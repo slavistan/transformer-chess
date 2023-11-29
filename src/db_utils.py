@@ -3,17 +3,16 @@ https://database.lichess.org/"""
 
 import array
 import time
-import zstandard
 import io
 import os
 import re
 import math
-import time
 import multiprocessing as mp
 import logging
 import psutil
-from typing import List, Dict, Tuple, Callable, Any, Collection, BinaryIO, Sequence, Type
+from typing import List, Tuple, Callable, Any, Sequence
 from tqdm.auto import tqdm
+import zstandard
 from src.san_chess import Outcome, get_outcome, SAN_ANNOTATION_POSTFIX
 from src.tools import RoUnalignedMMAP, unaligned_ro_mmap_open
 

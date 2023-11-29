@@ -5,7 +5,7 @@ from copy import deepcopy
 from collections.abc import Collection
 from abc import ABC, abstractmethod
 import random
-from typing import List, Tuple, Sequence, Literal, Set
+from typing import List, Tuple, Sequence, Literal, Set, Protocol
 import io
 import enum
 from dataclasses import dataclass
@@ -18,12 +18,7 @@ from PIL import Image, ImageTk
 
 # Characters required to express a single move in TAN format, e.g. 'a4', 'Qxb4'
 # or 'O-O-O'.
-TAN_MOVE_CHARS = (
-    "1", "2", "3", "4", "5", "6", "7", "8", # Ranks
-    "a", "b", "c", "d", "e", "f", "g", "h", # Files
-    "B", "K", "N", "Q", "R",                # Pieces
-    "x", "=", "O", "-"                      # Captures, promotion, castling
-)
+TAN_MOVE_CHARS = ("1", "2", "3", "4", "5", "6", "7", "8", "a", "b", "c", "d", "e", "f", "g", "h", "B", "K", "N", "Q", "R", "x", "=", "O", "-")  # Ranks  # Files  # Pieces  # Captures, promotion, castling
 
 # A moveline is the whitespace-separated concatenation of a game's movelist,
 # not including the game's result, e.g.
@@ -34,11 +29,7 @@ TAN_MOVELINE_CHARS = (" ",) + TAN_MOVE_CHARS
 
 # End of game identifiers. Single character abbreviations of '1-0', '0-1' and
 # '1/2-1/2'.
-TAN_EOG_CHARS = (
-    "W", # white wins
-    "S", # black wins
-    "U"  # draw
-)
+TAN_EOG_CHARS = ("W", "S", "U")  # white wins  # black wins  # draw
 
 # A gameline is the whitespace-separated concatenation of a game's movelist,
 # including the end of game identifier, e.g.
@@ -53,6 +44,7 @@ TAN_GAMELINE_CHARS = TAN_EOG_CHARS + TAN_MOVELINE_CHARS
 TAN_MAX_MOVE_LEN = len("Qa1xg3")
 
 SAN_ANNOTATION_POSTFIX = "?!+#"
+
 
 @enum.unique
 class Outcome(enum.Flag):
@@ -97,20 +89,10 @@ class Outcome(enum.Flag):
     # TODO: Any von Hand implementieren, mit Test festzurren, dass alle canonicals enthalten sind.
     # ANY = ...
 
-    WHITE_WINS = \
-        WHITE_WINS_CHECKMATE | \
-        WHITE_WINS_DISQUALIFICATION | \
-        WHITE_WINS_RESIGNATION_DIVERGED_FROM_PRESET | \
-        WHITE_WINS_RESIGNATION_CONTEXT_OVERFLOW | \
-        WHITE_WINS_RESIGNATION_ABANDONED_GAME
+    WHITE_WINS = WHITE_WINS_CHECKMATE | WHITE_WINS_DISQUALIFICATION | WHITE_WINS_RESIGNATION_DIVERGED_FROM_PRESET | WHITE_WINS_RESIGNATION_CONTEXT_OVERFLOW | WHITE_WINS_RESIGNATION_ABANDONED_GAME
     """White won the game."""
 
-    BLACK_WINS = \
-        BLACK_WINS_CHECKMATE | \
-        BLACK_WINS_DISQUALIFICATION | \
-        BLACK_WINS_RESIGNATION_DIVERGED_FROM_PRESET | \
-        BLACK_WINS_RESIGNATION_CONTEXT_OVERFLOW | \
-        BLACK_WINS_RESIGNATION_ABANDONED_GAME
+    BLACK_WINS = BLACK_WINS_CHECKMATE | BLACK_WINS_DISQUALIFICATION | BLACK_WINS_RESIGNATION_DIVERGED_FROM_PRESET | BLACK_WINS_RESIGNATION_CONTEXT_OVERFLOW | BLACK_WINS_RESIGNATION_ABANDONED_GAME
     """Black won the game."""
 
     CHECKMATE = WHITE_WINS_CHECKMATE | BLACK_WINS_CHECKMATE
@@ -140,7 +122,7 @@ class Outcome(enum.Flag):
     def from_union_string(union_str: str) -> Outcome:
         """Creates an outcome from a |-concatenation of strings."""
 
-        enum_values = union_str.split('|')
+        enum_values = union_str.split("|")
         enum_instance = Outcome(0)  # Initialize with no flags
         for enum_name in enum_values:
             try:
@@ -164,20 +146,20 @@ _termination_to_outcome = {
 class Game:
     """Outcome, details and statistics of a played game."""
 
-    moves: Collection[str]
+    moves: List[str]
     """Moves played in the game."""
 
     num_opening_moves: int
     """The number of moves that were provided as an opening sequence."""
 
-    retries: Collection[int]
+    retries: List[int]
     """Tracks the number of retries that were needed to generate a valid move.
     One entry per move."""
 
     outcome: Outcome
 
     @staticmethod
-    def summary(games: Collection[Game]):
+    def summary(games: List[Game]):
         """Returns statistics on a collection of games."""
 
         # Count canonical game outcomes.
@@ -193,8 +175,8 @@ class Game:
 
         # Retries.
         # num_retries_black = [r for r in g.retries[1::2] for g in games]
-        num_retries_black = [r for g in games for r in g.retries[1::2] ]
-        num_retries_white = [r for g in games for r in g.retries[::2] ]
+        num_retries_black = [r for g in games for r in g.retries[1::2]]
+        num_retries_white = [r for g in games for r in g.retries[::2]]
         num_retries_black_mean, num_retries_black_std = np.mean(num_retries_black), np.std(num_retries_black)
         num_retries_white_mean, num_retries_white_std = np.mean(num_retries_white), np.std(num_retries_white)
         num_retries = [r for g in games for r in g.retries]
@@ -211,7 +193,7 @@ class Game:
             "num_retries_black_std": num_retries_black_std,
             "num_retries_white_mean": num_retries_white_mean,
             "num_retries_white_std": num_retries_white_std,
-            }
+        }
 
 
 @enum.unique
@@ -231,13 +213,13 @@ class PlayerSignal(enum.Enum):
     """Transformer: context size exceeded."""
 
 
-class SANPlayer(ABC):
+class SANPlayer(Protocol):
+    """Chess player interface."""
 
     # Parameters with which player was initialized. Used to annotate
     # evaluations and performance measurements.
     info = {}
 
-    """Chess player interface."""
     @abstractmethod
     def __init__(self, movelist: Collection[str] = ()):
         """Initializes player with an optional movelist."""
@@ -250,9 +232,19 @@ class SANPlayer(ABC):
     def suggest_moves(self, n: int = 1) -> Tuple[PlayerSignal | None, Sequence[str]]:
         """Suggests moves in SAN format. Must not modify move stack."""
 
+    @abstractmethod
+    def reset(self, movelist: Collection[str] = ()):
+        """Resets the player's internal state followed by an initialization
+        with the given movelist."""
+
 
 class RandomPlayer(SANPlayer):
     """Plays random valid moves, optionally generating invalid moves."""
+
+    board: chess.Board
+    p_invalid: float
+    rng: random.Random
+    info: dict
 
     def __init__(
         self,
@@ -262,15 +254,7 @@ class RandomPlayer(SANPlayer):
         rng: random.Random = random.Random(),
     ):
         self.rng = rng
-        self.p_invalid = p_invalid
-        self.board = chess.Board()
-        for move in movelist:
-            self.board.push_san(move)
-
-        self.info = {
-            f"{movelist=}".split("=")[0]: list(movelist),
-            f"{p_invalid=}".split("=")[0]: p_invalid,
-        }
+        self.reset(movelist, p_invalid=p_invalid)
 
     def push_moves(self, movelist: Collection[str]):
         for move in movelist:
@@ -298,9 +282,18 @@ class RandomPlayer(SANPlayer):
                 move = variation[movepos + 2 :]
             else:
                 move = variation[movepos + 1 :]
-            move = move.rstrip(SAN_ANNOTATION_POSTFIX) # strip annotations
+            move = move.rstrip(SAN_ANNOTATION_POSTFIX)  # strip annotations
             moves.append(move)
         return None, moves
+
+    def reset(self, movelist: Collection[str] = (), *, p_invalid: float = 0.0):
+        self.board = chess.Board()
+        self.p_invalid = p_invalid
+        self.push_moves(movelist)
+        self.info = {
+            f"{movelist=}".split("=")[0]: list(movelist),
+            f"{p_invalid=}".split("=")[0]: p_invalid,
+        }
 
 
 class PresetPlayer(SANPlayer):
@@ -308,14 +301,15 @@ class PresetPlayer(SANPlayer):
     Aborts game if preset sequence of moves is exceeded. It's not checked
     whether the pushed moves match those in the preset movelist."""
 
+    moves: List[str]
+    move_idx: int
+    info: dict
+
     def __init__(
         self,
         movelist: Collection[str] = (),
     ):
-        self.moves = list(movelist)
-        self.move_idx = 0  # current move
-
-        self.info[f"{movelist=}".split("=")[0]] = list(movelist)
+        self.reset(movelist)
 
     def push_moves(self, movelist: Collection[str]):
         self.move_idx += len(movelist)
@@ -324,6 +318,11 @@ class PresetPlayer(SANPlayer):
         if self.move_idx >= len(self.moves):
             return PlayerSignal.DIVERGED_FROM_PRESET, []
         return None, [self.moves[self.move_idx]] * n
+
+    def reset(self, movelist: Collection[str] = ()):
+        self.moves = list(movelist)
+        self.move_idx = 0
+        self.info[f"{movelist=}".split("=")[0]] = list(movelist)
 
 
 class GUIPlayer(SANPlayer):
@@ -397,7 +396,6 @@ class GUIPlayer(SANPlayer):
                 movename_uci = self.selected_square + square
                 move_uci = chess.Move.from_uci(movename_uci)
                 if move_uci in self.board.legal_moves:
-
                     # Push the move to the other player:
                     # Hack to generate a move in san notation:
                     # this will produce a continuation for black: '11...Rg8'
@@ -409,7 +407,7 @@ class GUIPlayer(SANPlayer):
                         move_tan = variation[movepos + 2 :]
                     else:
                         move_tan = variation[movepos + 1 :]
-                    move_tan = move_tan.rstrip(SAN_ANNOTATION_POSTFIX) # strip annotations
+                    move_tan = move_tan.rstrip(SAN_ANNOTATION_POSTFIX)  # strip annotations
 
                     self.sig = None
                     self.move = move_tan
@@ -420,15 +418,12 @@ class GUIPlayer(SANPlayer):
 
         self.draw_board(fill=fill)
 
+    def reset(self, movelist: Collection[str] = ()):
+        pass
+        # TODO:
 
-def play_game(
-    white: SANPlayer,
-    black: SANPlayer | None = None,
-    *,
-    opening_moves: Collection[str] = (),
-    num_retries: Tuple[int, int] | int = 0, # num of retries for white and black
-    retry_strategy: Literal["eager", "lazy"] = "lazy"
-) -> Game:
+
+def play_game(white: SANPlayer, black: SANPlayer | None = None, *, opening_moves: Collection[str] = (), num_retries: Tuple[int, int] | int = 0, retry_strategy: Literal["eager", "lazy"] = "lazy") -> Game:  # num of retries for white and black
     """Plays a game with one or two players, returning a result and game
     statistics. No draws can be claimed to make the outcome deterministic."""
 
@@ -445,7 +440,7 @@ def play_game(
                 yield sig, []
 
         else:
-            for _ in range(num_retries+1):
+            for _ in range(num_retries + 1):
                 sig, moves = players[players_idx].suggest_moves(1)
                 if sig is None and len(moves) == 0:
                     raise ValueError("No moves suggested")
@@ -557,37 +552,34 @@ conclusive_games = frozendict(
             # https://lichess.org/VO3jq34v#68
             "d4 d5 Nc3 Nf6 e3 Bg4 Nf3 Nc6 Qd3 e6 Ne5 Qe7 e4 Qb4 h3 Bh5 exd5 Nxd5 Qb5 Qxb5 Nxc6 Qxc6 Kd2 Bb4 f3 O-O g4 Bg6 f4 Rfe8 a3 Ba5 h4 Nxf4 d5 exd5 Ra2 d4 Kd1 dxc3 Be3 cxb2 Bd3 Qb6 Bxg6 Nxg6 a4 b1=Q Ke2 Qxh1 g5 Qhb1 c3 Qxa2 Ke1 Qxa4 Kf2 Qab5 Bc5 Q6xc5 Kf3 Re3 Kg4 Rae8 Kh5 R8e4 c4 Qbxc4".split(" ")
         ],
-        Outcome.DRAW_INSUFFICIENT_MATERIAL: [
-            "e4 d5 exd5 Qxd5 Nc3 Qxg2 Qh5 Qxh1 Qxh7 Qxh2 Qxh8 Qxg1 Qxg8 Nc6 d3 Qxf1 Kd2 Qxc1 Ke2 Qxa1 Kd2 Qxa2 Kc1 Qxb2 Kd1 Qxc3 Ke2 Qxc2 Ke1 Qxd3 f3 Qxf3 Qxg7 Qg2 Qxf8 Kd7 Qxf7 Qg3 Kd2 b6 Qf8 Ke6 Qxc8 Kf6 Qxa8 Kg7 Qxa7 Kf8 Qxb6 Kg7 Qxc7 Kg8 Qxc6 Kg7 Qd6 Kg8 Qxe7 Qg7 Qxg7 Kxg7".split(" ")
-        ],
+        Outcome.DRAW_INSUFFICIENT_MATERIAL: ["e4 d5 exd5 Qxd5 Nc3 Qxg2 Qh5 Qxh1 Qxh7 Qxh2 Qxh8 Qxg1 Qxg8 Nc6 d3 Qxf1 Kd2 Qxc1 Ke2 Qxa1 Kd2 Qxa2 Kc1 Qxb2 Kd1 Qxc3 Ke2 Qxc2 Ke1 Qxd3 f3 Qxf3 Qxg7 Qg2 Qxf8 Kd7 Qxf7 Qg3 Kd2 b6 Qf8 Ke6 Qxc8 Kf6 Qxa8 Kg7 Qxa7 Kf8 Qxb6 Kg7 Qxc7 Kg8 Qxc6 Kg7 Qd6 Kg8 Qxe7 Qg7 Qxg7 Kxg7".split(" ")],
         Outcome.DRAW_FIVEFOLD_REPETITION: [
             # https://lichess.org/UzKC66ai
             "e4 d6 d4 Nf6 Nc3 g5 Bxg5 h6 Bxf6 exf6 Nf3 Nc6 Bb5 Bd7 Qd2 Qe7 O-O-O O-O-O Rhe1 a6 Ba4 b5 Bb3 Na5 Nd5 Nxb3 cxb3 Qe6 Qc3 c6 Kb1 Kb7 Rc1 Rc8 Qa5 cxd5 exd5 Qxd5 Rxc8 Bxc8 Rc1 Bg7 Qc7 Ka8 Qa5 Bf5 Ka1 Rc8 Qxa6 Kb8 Qb6 Ka8 Qa6 Kb8 Qb6 Ka8 Qa6 Kb8 Qb6 Ka8 Qa6 Kb8 Qb6 Ka8 Qa6".split(" ")
         ],
-        Outcome.DRAW_SEVENTYFIVE_MOVES: [
-            "Nc3 c5 b4 cxb4 e4 Na6 Bd3 f6 f4 b6 Bb2 Bb7 Ba3 Rb8 Bxb4 e6 Bxa6 d6 Ba3 Qc7 Bxb7 Qd8 Ba6 g5 Bb5+ Qd7 g4 h6 Nf3 Kf7 fxg5 Rd8 gxh6 Ke8 Ng5 Bxh6 Nh7 Qxb5 Qe2 Bxd2+ Kxd2 Kd7 Bc1 Kc8 g5 Ne7 Qd1 a6 Na4 Qd3+ Kxd3 Nd5 Bb2 Rde8 Rc1 Kd8 Rg1 Kc7 Qg4 Ne7 Qd1 Kd7 Nc3 Ra8 Qd2 Rxh7 Rg3 Rc8 Nb1 Ng8 Rh1 Ke7 c4 Rf8 h4 a5 Qd1 fxg5 h5 Rhf7 Rgg1 Rh7 Be5 Nh6 Kc2 Rf6 Nc3 Ke8 Na4 Rhf7 Rxg5 Rg7 Rf5 Kd7 Rg5 Nf5 Nb2 Kd8 Qd2 Kd7 Rh3 Nd4+ Kd3 Nc6 Qc2 Rf1 Re3 Rh1 Qf2 a4 Bd4 Nxd4 Rf3 Nf5 Qh2 Rg1 Qh3 Ra1 Rfg3 Rb1 Rg1 Nd4 Qe3 d5 a3 Nc2 Qxb6 Ne3 h6 Re7 Kxe3 Kc8 Rxd5 Rc7 Qxe6+ Kb7 Qc8+ Rxc8 Rg2 Rb8 Rd6 Rg8 Kd4 Rg7 Kd5 Kb8 Rg4 Rg5+ Kc6 Rg6 Re6 Re1 Rf4 Rf6 Rfxf6 Rh1 Rf7 Rh5 Ref6 Rd5 Nd3 Ra5 e5 Rc5+ Kd6 Rxe5 Rh7 Re7 Rf1 Re8 Re7 Rg8 Nb4 Rg7 Rf5 Rg1 Rb7+ Ka8 Nc2 Ra1 Re7 Rh1 Ne3 Kb8 Nc2 Ka8 Na1 Rh2 Kd7 Kb7 Rf8 Rh4 Rfe8 Re4 Kd6+ Kb6 Rg7 Rf4 Re1 Ka6 Rd1 Rf5 Rd4 Rd5+ cxd5 Ka5 Rf4 Ka6 Rg8 Ka7 Rc4 Kb7 Rh4 Ka6 Rhg4 Kb5 Rd4 Ka5 Re8 Ka6 Rg4 Ka5 Rf8 Ka6 Rf3 Kb5 Ke7 Ka6 Rb3 Ka5 Ke8 Ka6 Nc2 Ka7 Rh4 Ka6 Kf8 axb3 Re4 bxc2 Ke8 Ka5 Rg4 c1=R Rg6 Rh1 Kd7 Rd1 Kc8 Rb1 a4 Rb6 h7 Rd6 Rf6 Kxa4 Rf2 Kb5 Rd2 Kc4 Re2 Rf6 Re7 Rd6 Rd7 Kd3 Ra7 Rf6 Rb7 Rf7 Rb4 Rxh7 Kb8 Rh5 Rc4 Kd2 Rf4 Rh3 Ra4 Ke3 Re4+ Kd3 Re6 Rg3 Re7 Rh3 d6 Rh7 Rb7 Re7 Rb6 Kd2 Rc6 Rg7 Rc4 Kd3 Rc6 Ke4 Rc3 Rg3 Rxg3 Kd4 Rg4+ Kc5 Rg2 Kb5 Rg5+ Kb4 Rh5 Ka3 Ka7 Kb3 Re5 Ka4 Rc5 Ka3 Rh5 Kb2 Ka8 Kb3 Rc5 Ka2 Rc4 Kb1 Rh4 Ka2 Rh5 Kb3 Kb7 Ka3 Kb8 Ka2 Rh6 Kb3 Rh5 Kc3 Rh8 Kc2 Rh1 Kb3 d7 Kc3 d8=N Kb3 Rg1 Ka4 Rh1 Kb3 Kc8 Ka4 Kb8 Kb3 Re1 Ka4 Ne6 Kb4 Nf4 Ka5 Ng2 Kb6 Re3 Kb5 Kb7 Kc5 Rc3+ Kb5 Ra3 Kc5 Rb3 Kd6 Rb4 Ke7 Kb6 Kf6 Rb1 Ke6 Kb7 Kf5 Re1 Kf6 Kc6 Kg6 Re5 Kf6 Re4 Kg7 Re5 Kh6 Re3 Kg6 Rd3 Kf6 Ra3 Kg7 Nf4 Kh8 Ng2 Kg8 Ne3 Kf8 Kc7 Kf7 Kc8 Kg8 Kc7 Kf8 Ra8+ Kg7 Rb8 Kh7 Kc8 Kg7 Rb4 Kf7 Rb6 Ke7 Kb7 Ke8 Ka7 Ke7 Rf6 Kd7 Rg6 Ke7 Rg1 Ke8 Kb7 Ke7 Rg6 Kd7 Ka8 Kd8 Rb6 Ke8 Rb8+ Kd7 Rh8 Kc7 Rh2 Kc6 Nf1 Kc5 Ng3 Kc4 Nh1 Kb4 Kb7 Ka4 Kb8 Ka5 Ka7 Ka4 Rd2 Kb3 Ka6 Kb4 Rb2+ Kc5 Rf2 Kc4 Rc2+ Kb3 Rc4 Kb2 Ra4 Kb3 Ra5 Kb2 Nf2 Kc3 Rd5 Kb3 Rd2 Kc4 Rd8 Kc3 Re8 Kb2 Re1 Kc3 Rg1 Kb2 Rd1 Kb3 Rd2 Ka4 Rd5 Kb3 Ka5 Kc3 Re5 Kb2 Rg5".split(" ")
-        ],
+        Outcome.DRAW_SEVENTYFIVE_MOVES: ["Nc3 c5 b4 cxb4 e4 Na6 Bd3 f6 f4 b6 Bb2 Bb7 Ba3 Rb8 Bxb4 e6 Bxa6 d6 Ba3 Qc7 Bxb7 Qd8 Ba6 g5 Bb5+ Qd7 g4 h6 Nf3 Kf7 fxg5 Rd8 gxh6 Ke8 Ng5 Bxh6 Nh7 Qxb5 Qe2 Bxd2+ Kxd2 Kd7 Bc1 Kc8 g5 Ne7 Qd1 a6 Na4 Qd3+ Kxd3 Nd5 Bb2 Rde8 Rc1 Kd8 Rg1 Kc7 Qg4 Ne7 Qd1 Kd7 Nc3 Ra8 Qd2 Rxh7 Rg3 Rc8 Nb1 Ng8 Rh1 Ke7 c4 Rf8 h4 a5 Qd1 fxg5 h5 Rhf7 Rgg1 Rh7 Be5 Nh6 Kc2 Rf6 Nc3 Ke8 Na4 Rhf7 Rxg5 Rg7 Rf5 Kd7 Rg5 Nf5 Nb2 Kd8 Qd2 Kd7 Rh3 Nd4+ Kd3 Nc6 Qc2 Rf1 Re3 Rh1 Qf2 a4 Bd4 Nxd4 Rf3 Nf5 Qh2 Rg1 Qh3 Ra1 Rfg3 Rb1 Rg1 Nd4 Qe3 d5 a3 Nc2 Qxb6 Ne3 h6 Re7 Kxe3 Kc8 Rxd5 Rc7 Qxe6+ Kb7 Qc8+ Rxc8 Rg2 Rb8 Rd6 Rg8 Kd4 Rg7 Kd5 Kb8 Rg4 Rg5+ Kc6 Rg6 Re6 Re1 Rf4 Rf6 Rfxf6 Rh1 Rf7 Rh5 Ref6 Rd5 Nd3 Ra5 e5 Rc5+ Kd6 Rxe5 Rh7 Re7 Rf1 Re8 Re7 Rg8 Nb4 Rg7 Rf5 Rg1 Rb7+ Ka8 Nc2 Ra1 Re7 Rh1 Ne3 Kb8 Nc2 Ka8 Na1 Rh2 Kd7 Kb7 Rf8 Rh4 Rfe8 Re4 Kd6+ Kb6 Rg7 Rf4 Re1 Ka6 Rd1 Rf5 Rd4 Rd5+ cxd5 Ka5 Rf4 Ka6 Rg8 Ka7 Rc4 Kb7 Rh4 Ka6 Rhg4 Kb5 Rd4 Ka5 Re8 Ka6 Rg4 Ka5 Rf8 Ka6 Rf3 Kb5 Ke7 Ka6 Rb3 Ka5 Ke8 Ka6 Nc2 Ka7 Rh4 Ka6 Kf8 axb3 Re4 bxc2 Ke8 Ka5 Rg4 c1=R Rg6 Rh1 Kd7 Rd1 Kc8 Rb1 a4 Rb6 h7 Rd6 Rf6 Kxa4 Rf2 Kb5 Rd2 Kc4 Re2 Rf6 Re7 Rd6 Rd7 Kd3 Ra7 Rf6 Rb7 Rf7 Rb4 Rxh7 Kb8 Rh5 Rc4 Kd2 Rf4 Rh3 Ra4 Ke3 Re4+ Kd3 Re6 Rg3 Re7 Rh3 d6 Rh7 Rb7 Re7 Rb6 Kd2 Rc6 Rg7 Rc4 Kd3 Rc6 Ke4 Rc3 Rg3 Rxg3 Kd4 Rg4+ Kc5 Rg2 Kb5 Rg5+ Kb4 Rh5 Ka3 Ka7 Kb3 Re5 Ka4 Rc5 Ka3 Rh5 Kb2 Ka8 Kb3 Rc5 Ka2 Rc4 Kb1 Rh4 Ka2 Rh5 Kb3 Kb7 Ka3 Kb8 Ka2 Rh6 Kb3 Rh5 Kc3 Rh8 Kc2 Rh1 Kb3 d7 Kc3 d8=N Kb3 Rg1 Ka4 Rh1 Kb3 Kc8 Ka4 Kb8 Kb3 Re1 Ka4 Ne6 Kb4 Nf4 Ka5 Ng2 Kb6 Re3 Kb5 Kb7 Kc5 Rc3+ Kb5 Ra3 Kc5 Rb3 Kd6 Rb4 Ke7 Kb6 Kf6 Rb1 Ke6 Kb7 Kf5 Re1 Kf6 Kc6 Kg6 Re5 Kf6 Re4 Kg7 Re5 Kh6 Re3 Kg6 Rd3 Kf6 Ra3 Kg7 Nf4 Kh8 Ng2 Kg8 Ne3 Kf8 Kc7 Kf7 Kc8 Kg8 Kc7 Kf8 Ra8+ Kg7 Rb8 Kh7 Kc8 Kg7 Rb4 Kf7 Rb6 Ke7 Kb7 Ke8 Ka7 Ke7 Rf6 Kd7 Rg6 Ke7 Rg1 Ke8 Kb7 Ke7 Rg6 Kd7 Ka8 Kd8 Rb6 Ke8 Rb8+ Kd7 Rh8 Kc7 Rh2 Kc6 Nf1 Kc5 Ng3 Kc4 Nh1 Kb4 Kb7 Ka4 Kb8 Ka5 Ka7 Ka4 Rd2 Kb3 Ka6 Kb4 Rb2+ Kc5 Rf2 Kc4 Rc2+ Kb3 Rc4 Kb2 Ra4 Kb3 Ra5 Kb2 Nf2 Kc3 Rd5 Kb3 Rd2 Kc4 Rd8 Kc3 Re8 Kb2 Re1 Kc3 Rg1 Kb2 Rd1 Kb3 Rd2 Ka4 Rd5 Kb3 Ka5 Kc3 Re5 Kb2 Rg5".split(" ")],
     }
 )
+
 
 def tan_moveline_from_gameline(tan_gameline: str) -> str:
     tan_gameline = tan_gameline.rstrip()
     if tan_gameline.endswith(TAN_EOG_CHARS):
-        return tan_gameline[:-2] # strip eog char and trailing whitespace
+        return tan_gameline[:-2]  # strip eog char and trailing whitespace
     return tan_gameline
 
 
 def play_puzzle(
     opening: Sequence[str],
-    continuations: Set[str], # one-move continuations
+    continuations: Set[str],  # one-move continuations
     player: SANPlayer,
     *,
-    num_retries = 0,
+    num_retries=0,
 ):
     player.push_moves(opening)
 
     moves = set()
-    for _ in range(num_retries+1):
+    for _ in range(num_retries + 1):
         sig, suggested_moves = player.suggest_moves()
         if sig is not None:
             return False
