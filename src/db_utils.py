@@ -8,8 +8,7 @@ import io
 import os
 import re
 import math
-import torch
-import chess
+import time
 import multiprocessing as mp
 import logging
 import psutil
@@ -115,7 +114,29 @@ def pgn_gameline_to_tan(san_gameline: str) -> str:
     return san_gameline
 
 
-def pgn_to_tan(pgn_file: str, out_file: str, parallel_process_args={}):
+def pgn_to_tan_sequential(pgn_file: str, out_file: str):
+    with open(pgn_file, "rb") as f_in, open(out_file, "w") as f_out:
+        file_sz = os.path.getsize(pgn_file)
+        bytes_processed = 0
+        for i, line in enumerate(f_in):
+            line_str = line.decode("utf-8")
+            if line_str.startswith("1"):
+                tan_gameline = pgn_gameline_to_tan(line_str)
+                f_out.write(tan_gameline)
+
+            bytes_processed += len(line)
+            if i % 1024 == 0:
+                percent_processed = 100 * bytes_processed / file_sz
+                print("\r" * 100 + f"Processed {percent_processed:.2f}% of file ... ", end="")
+        print(f"done. Output file: '{out_file}'.")
+
+
+# TODO: OOM :(
+def pgn_to_tan(
+    pgn_file: str,
+    out_file: str,
+    parallel_process_args={},
+):
     return parallel_process(
         pgn_file,
         split_fn=splitfn_pgn_gameslines,
@@ -156,12 +177,12 @@ def parallel_process(
     #    ^  ^^
     #    ^  ^^~~~ size in bytes of chunk 0
     #    ^~~~~~~~ offset in bytes of chunk 0
-    logger.info(f"{parallel_process.__name__}: Calling splitfn ...")
+    logger.info("Calling splitfn ...")
+    start = time.time()
     chunks_info = split_fn(in_file)
-    logger.info(f"{parallel_process.__name__}: done.")
+    logger.info(f"done in {int(time.time() - start)}s.")
     num_chunks = len(chunks_info) // 2
 
-    logger.info(f"{parallel_process.__name__}: Preparing workers' data ...")
     chunks_per_worker = math.ceil(num_chunks / num_workers)
     worker_args: List[Tuple[str, Sequence[int], ProcessFn, int, Tuple, bool, bool]] = []
     for i in range(num_workers):
@@ -179,18 +200,19 @@ def parallel_process(
                 mmap_mode,
             )
         )
-    logger.info(f"{parallel_process.__name__}: done.")
 
     # Start parallel processing and collect the results.
-    logger.info(f"{parallel_process.__name__}: Starting parallel processing with {num_workers} workers ...")
+    logger.info(f"Starting parallel processing with {num_workers} workers ...")
+    start = time.time()
     with mp.get_context("spawn").Pool(num_workers) as p:
         worker_results: List[List[Any]] = p.starmap(worker, worker_args)
-    logger.info(f"{parallel_process.__name__}: done.")
+    logger.info(f"done in {int(time.time() - start)}s.")
 
     # Process the results.
-    logger.info(f"{parallel_process.__name__}: Calling collectfn ...")
+    logger.info("Calling collectfn ...")
+    start = time.time()
     result = collect_fn(worker_results)
-    logger.info(f"{parallel_process.__name__}: done.")
+    logger.info(f"done in {int(time.time() - start)}s.")
     return result
 
 
