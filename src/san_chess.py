@@ -5,7 +5,7 @@ from copy import deepcopy
 from collections.abc import Collection
 from abc import ABC, abstractmethod
 import random
-from typing import List, Tuple, Sequence, Literal, Set, Protocol
+from typing import List, Tuple, Sequence, Literal, Set, Protocol, TypedDict
 import io
 import enum
 from dataclasses import dataclass
@@ -44,6 +44,7 @@ TAN_GAMELINE_CHARS = TAN_EOG_CHARS + TAN_MOVELINE_CHARS
 TAN_MAX_MOVE_LEN = len("Qa1xg3")
 
 SAN_MOVE_ANNOTATION_POSTFIX = "?!+#"
+
 
 @enum.unique
 class Outcome(enum.Flag):
@@ -141,8 +142,7 @@ _termination_to_outcome = {
 }
 
 
-@dataclass
-class Game:
+class Game(TypedDict):
     """Outcome, details and statistics of a played game."""
 
     moves: List[str]
@@ -157,42 +157,43 @@ class Game:
 
     outcome: Outcome
 
-    @staticmethod
-    def summary(games: List[Game]):
-        """Returns statistics on a collection of games."""
+    # TODO: Doesn't work with TypedDict, use simple function
+    # @staticmethod
+    # def summary(games: List[Game]):
+    #     """Returns statistics on a collection of games."""
 
-        # Count canonical game outcomes.
-        outcome_counts = {o: 0 for o in Outcome}
-        for game in games:
-            for outcome in Outcome:
-                if game.outcome & outcome:
-                    outcome_counts[outcome] += 1
+    #     # Count canonical game outcomes.
+    #     outcome_counts = {o: 0 for o in Outcome}
+    #     for game in games:
+    #         for outcome in Outcome:
+    #             if game.outcome & outcome:
+    #                 outcome_counts[outcome] += 1
 
-        # Length of games.
-        num_moves = [len(g.moves) for g in games]
-        mean, std = np.mean(num_moves), np.std(num_moves)
+    #     # Length of games.
+    #     num_moves = [len(g.moves) for g in games]
+    #     mean, std = np.mean(num_moves), np.std(num_moves)
 
-        # Retries.
-        # num_retries_black = [r for r in g.retries[1::2] for g in games]
-        num_retries_black = [r for g in games for r in g.retries[1::2]]
-        num_retries_white = [r for g in games for r in g.retries[::2]]
-        num_retries_black_mean, num_retries_black_std = np.mean(num_retries_black), np.std(num_retries_black)
-        num_retries_white_mean, num_retries_white_std = np.mean(num_retries_white), np.std(num_retries_white)
-        num_retries = [r for g in games for r in g.retries]
-        num_retries_mean, num_retries_std = np.mean(num_retries), np.std(num_retries)
+    #     # Retries.
+    #     # num_retries_black = [r for r in g.retries[1::2] for g in games]
+    #     num_retries_black = [r for g in games for r in g.retries[1::2]]
+    #     num_retries_white = [r for g in games for r in g.retries[::2]]
+    #     num_retries_black_mean, num_retries_black_std = np.mean(num_retries_black), np.std(num_retries_black)
+    #     num_retries_white_mean, num_retries_white_std = np.mean(num_retries_white), np.std(num_retries_white)
+    #     num_retries = [r for g in games for r in g.retries]
+    #     num_retries_mean, num_retries_std = np.mean(num_retries), np.std(num_retries)
 
-        # Plot number of retries.
-        return {
-            "outcome_counts": outcome_counts,
-            "num_moves_mean": mean,
-            "num_moves_std": std,
-            "num_retries_mean": num_retries_mean,
-            "num_retries_std": num_retries_std,
-            "num_retries_black_mean": num_retries_black_mean,
-            "num_retries_black_std": num_retries_black_std,
-            "num_retries_white_mean": num_retries_white_mean,
-            "num_retries_white_std": num_retries_white_std,
-        }
+    #     # Plot number of retries.
+    #     return {
+    #         "outcome_counts": outcome_counts,
+    #         "num_moves_mean": mean,
+    #         "num_moves_std": std,
+    #         "num_retries_mean": num_retries_mean,
+    #         "num_retries_std": num_retries_std,
+    #         "num_retries_black_mean": num_retries_black_mean,
+    #         "num_retries_black_std": num_retries_black_std,
+    #         "num_retries_white_mean": num_retries_white_mean,
+    #         "num_retries_white_std": num_retries_white_std,
+    #     }
 
 
 @enum.unique
@@ -422,7 +423,14 @@ class GUIPlayer(SANPlayer):
         # TODO:
 
 
-def play_game(white: SANPlayer, black: SANPlayer | None = None, *, opening_moves: Collection[str] = (), num_retries: Tuple[int, int] | int = 0, retry_strategy: Literal["eager", "lazy"] = "lazy") -> Game:  # num of retries for white and black
+def play_game(
+    white: SANPlayer,
+    black: SANPlayer | None = None,
+    *,
+    opening_moves: Collection[str] = (),
+    num_retries: Tuple[int, int] | int = 0, # num of retries for white and black to produce a valid move
+    retry_strategy: Literal["eager", "lazy"] = "lazy",
+) -> Game:
     """Plays a game with one or two players, returning a result and game
     statistics. No draws can be claimed to make the outcome deterministic."""
 
@@ -470,7 +478,12 @@ def play_game(white: SANPlayer, black: SANPlayer | None = None, *, opening_moves
         for move in opening_moves:
             board.push_san(move)
     except ValueError:
-        return Game(moves, len(opening_moves), retries, Outcome.ABORT_INVALID_OPENING)
+        return {
+            "moves": moves,
+            "num_opening_moves": len(opening_moves),
+            "retries": retries,
+            "outcome": Outcome.ABORT_INVALID_OPENING,
+        }
     for p in players:
         p.push_moves(moves)
 
@@ -479,7 +492,12 @@ def play_game(white: SANPlayer, black: SANPlayer | None = None, *, opening_moves
         outcome = board.outcome()
         num_retries_move = num_retries[board.turn]
         if outcome is not None:
-            return Game(moves, len(opening_moves), retries, Outcome.from_outcome(outcome))
+            return {
+                "moves": moves,
+                "num_opening_moves": len(opening_moves),
+                "retries": retries,
+                "outcome": Outcome.from_outcome(outcome),
+            }
 
         # Get a move suggestions, validate and push it.
         found_move_after_retries = False
@@ -506,7 +524,12 @@ def play_game(white: SANPlayer, black: SANPlayer | None = None, *, opening_moves
                         outcome = Outcome.WHITE_WINS_RESIGNATION_ABANDONED_GAME
                 else:
                     raise NotImplementedError(f"Unknown signal: {signal}")
-                return Game(moves, len(opening_moves), retries, outcome)
+                return {
+                    "moves": moves,
+                    "num_opening_moves": len(opening_moves),
+                    "retries": retries,
+                    "outcome": outcome,
+                }
 
             try:
                 board.push_san(move)
@@ -521,7 +544,7 @@ def play_game(white: SANPlayer, black: SANPlayer | None = None, *, opening_moves
 
         if not found_move_after_retries:
             outcome = Outcome.BLACK_WINS_DISQUALIFICATION if board.turn else Outcome.WHITE_WINS_DISQUALIFICATION
-            return Game(moves, len(opening_moves), retries, outcome)
+            return {"moves": moves, "num_opening_moves": len(opening_moves), "retries": retries, "outcome": outcome}
 
         retries.append(retry)
 
@@ -530,7 +553,7 @@ def get_outcome(san_movelist: Collection[str]) -> Outcome:
     """Returns a game's outcome by playing it out by a PresetPlayer.
     Inconclusive games will result in a resignation signal."""
     game = play_game(PresetPlayer([]), opening_moves=san_movelist)
-    return game.outcome
+    return game["outcome"]
 
 
 conclusive_games = frozendict(
@@ -566,4 +589,3 @@ def tan_moveline_from_gameline(tan_gameline: str) -> str:
     if tan_gameline.endswith(TAN_EOG_CHARS):
         return tan_gameline[:-2]  # strip eog char and trailing whitespace
     return tan_gameline
-

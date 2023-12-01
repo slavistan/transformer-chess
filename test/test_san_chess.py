@@ -29,7 +29,7 @@ def test_random_player():
     for seed in range(32):
         rng = random.Random(seed)
         game = san_chess.play_game(san_chess.RandomPlayer(rng=rng, p_invalid=1.0))
-        assert game.outcome in san_chess.Outcome.DISQUALIFICATION
+        assert game["outcome"] in san_chess.Outcome.DISQUALIFICATION
 
 
 def test_play_game():
@@ -41,18 +41,18 @@ def test_play_game():
                 opening = movelist[:i]  # try prefixes as openings
                 game_1p = san_chess.play_game(san_chess.PresetPlayer(movelist), opening_moves=opening)
                 game_2p = san_chess.play_game(san_chess.PresetPlayer(movelist), san_chess.PresetPlayer(movelist), opening_moves=opening)
-                assert outcome == game_1p.outcome  # outcomes match
-                assert outcome == game_2p.outcome  # outcomes match
-                assert all(r == 0 for r in game_1p.retries)  # no retries were needed
-                assert all(r == 0 for r in game_2p.retries)  # no retries were needed
-                assert len(game_1p.retries) == len(game_1p.moves)  # one retry per move
-                assert len(game_2p.retries) == len(game_2p.moves)  # one retry per move
+                assert outcome == game_1p["outcome"]  # outcomes match
+                assert outcome == game_2p["outcome"]  # outcomes match
+                assert all(r == 0 for r in game_1p["retries"])  # no retries were needed
+                assert all(r == 0 for r in game_2p["retries"])  # no retries were needed
+                assert len(game_1p["retries"]) == len(game_1p["moves"])  # one retry per move
+                assert len(game_2p["retries"]) == len(game_2p["moves"])  # one retry per move
 
         for movelist in games:
             game_1p = san_chess.play_game(san_chess.PresetPlayer([]), opening_moves=movelist)
             game_2p = san_chess.play_game(san_chess.PresetPlayer([]), san_chess.PresetPlayer([]), opening_moves=movelist)
-            assert outcome == game_1p.outcome  # outcomes match
-            assert outcome == game_2p.outcome  # outcomes match
+            assert outcome == game_1p["outcome"]  # outcomes match
+            assert outcome == game_2p["outcome"]  # outcomes match
 
 
 def test_get_outcome():

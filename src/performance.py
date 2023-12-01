@@ -240,7 +240,7 @@ def _apply_args_and_kwargs(fn, args, kwargs):
 
 
 def plot_outcome_hist(games: List[Game]) -> ggplot:
-    outcomes = [str(g.outcome).partition(".")[2] for g in games]
+    outcomes = [str(g["outcome"]).partition(".")[2] for g in games]
     df = pd.DataFrame.from_dict({"outcomes": outcomes})
     plot = ggplot(df) + geom_bar(aes(x="outcomes")) + theme(axis_text_x=element_text(angle=45, vjust=1.0, hjust=1))
     return plot
@@ -251,15 +251,15 @@ def plot_game_len_hist(
     *,
     binwidth=7,
 ) -> ggplot:
-    length = [len(g.moves) for g in games]
-    outcome = [str(g.outcome).partition(".")[2] for g in games]
+    length = [len(g["moves"]) for g in games]
+    outcome = [str(g["outcome"]).partition(".")[2] for g in games]
     df = pd.DataFrame.from_dict({"length": length, "outcome": outcome})
     plot = ggplot(df) + geom_histogram(aes(x="length", fill="outcome"), binwidth=binwidth, color="none") + labs(title="Length of games", x="Number of Moves", y="Count")
     return plot
 
 
 def mean_game_len(games: List[Game]) -> Tuple[float, float]:
-    lengths = [len(g.moves) for g in games]
+    lengths = [len(g["moves"]) for g in games]
     mean, std = np.mean(lengths).astype(float), np.std(lengths).astype(float)
     return mean, std
 
