@@ -8,12 +8,55 @@ import sys
 import logging
 from torch import cuda
 import clize
-from src import db_utils, san_chess, vanilla_transformer
+from src import db_utils, san_chess, vanilla_transformer, performance
 
 logging.basicConfig(
     format="[%(filename)s:%(lineno)s@%(funcName)s][%(levelname)s] %(message)s",
     level=logging.INFO,
 )
+
+def eval(
+    pth_file: str,
+    *,
+    output=None,
+    num_random=16,
+    num_self=16,
+    num_puzzle=64
+):
+    if output is None:
+        # TODO: report-001, report-002 ... Namenskonflikte abfangen
+        output = pth_file + "-report.pdf"
+
+    m = vanilla_transformer.Model.load(pth_file).to("cpu")
+    p = vanilla_transformer.TransformerPlayer(m)
+
+    result = {}
+
+    # Games against random player
+    for side in ["white", "black"]:
+        start = time.time()
+        logging.info(f"Playing {num_random} games against random player as {side} ... ")
+        result[f"vs-random-as-{side}"] = performance.vs_random(
+            p,
+            num_games=num_random,
+            num_retries=8,
+            play_as=side,
+            num_workers=2,
+        )
+        logging.info(f"Done after {int(time.time() - start)}s.")
+
+    # Games against self
+    logging.info(f"Playing {num_self} games against self ... ")
+    result["vs-self"] = performance.vs_self(
+        p,
+        num_games=num_self,
+        num_retries=8
+    )
+
+
+
+
+
 
 
 def pgn_to_tan(pgn_file: str, *, output=None):

@@ -13,7 +13,7 @@ import psutil
 from typing import List, Tuple, Callable, Any, Sequence
 from tqdm.auto import tqdm
 import zstandard
-from src.san_chess import Outcome, get_outcome, SAN_ANNOTATION_POSTFIX
+from src.san_chess import Outcome, get_outcome, SAN_MOVE_ANNOTATION_POSTFIX
 from src.tools import RoUnalignedMMAP, unaligned_ro_mmap_open
 
 # String to array of ints.
@@ -90,11 +90,17 @@ _san_movetext_re = [
     re.compile(r"\{[^}]*\}\s?"),
     # Matches move quality annotations such as blunders or brilliant moves, and
     # checks and checkmate indicators.
-    re.compile(f"[{SAN_ANNOTATION_POSTFIX}]"),
+    re.compile(f"[{SAN_MOVE_ANNOTATION_POSTFIX}]"),
 ]
 
 _san_movetext_eog_to_tan = {"1-0": "W", "0-1": "S", "1/2-1/2": "U", " *": ""}  # incomplete games are denoted by an asterisk
 
+def san_move_to_tan(san_move: str) -> str:
+    return _san_movetext_re[2].sub("", san_move)
+
+
+def tan_gameline_to_moveline(tan_gameline: str) -> str:
+    return tan_gameline.rstrip()[:-2]
 
 def pgn_gameline_to_tan(san_gameline: str) -> str:
     """Converts a game's PGN's movetext (aka. gameline) to trimmed algebraic

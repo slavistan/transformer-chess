@@ -43,8 +43,7 @@ TAN_GAMELINE_CHARS = TAN_EOG_CHARS + TAN_MOVELINE_CHARS
 # it in the TAN format.
 TAN_MAX_MOVE_LEN = len("Qa1xg3")
 
-SAN_ANNOTATION_POSTFIX = "?!+#"
-
+SAN_MOVE_ANNOTATION_POSTFIX = "?!+#"
 
 @enum.unique
 class Outcome(enum.Flag):
@@ -282,7 +281,7 @@ class RandomPlayer(SANPlayer):
                 move = variation[movepos + 2 :]
             else:
                 move = variation[movepos + 1 :]
-            move = move.rstrip(SAN_ANNOTATION_POSTFIX)  # strip annotations
+            move = move.rstrip(SAN_MOVE_ANNOTATION_POSTFIX)  # strip annotations
             moves.append(move)
         return None, moves
 
@@ -407,7 +406,7 @@ class GUIPlayer(SANPlayer):
                         move_tan = variation[movepos + 2 :]
                     else:
                         move_tan = variation[movepos + 1 :]
-                    move_tan = move_tan.rstrip(SAN_ANNOTATION_POSTFIX)  # strip annotations
+                    move_tan = move_tan.rstrip(SAN_MOVE_ANNOTATION_POSTFIX)  # strip annotations
 
                     self.sig = None
                     self.move = move_tan
@@ -568,22 +567,3 @@ def tan_moveline_from_gameline(tan_gameline: str) -> str:
         return tan_gameline[:-2]  # strip eog char and trailing whitespace
     return tan_gameline
 
-
-def play_puzzle(
-    opening: Sequence[str],
-    continuations: Set[str],  # one-move continuations
-    player: SANPlayer,
-    *,
-    num_retries=0,
-):
-    player.push_moves(opening)
-
-    moves = set()
-    for _ in range(num_retries + 1):
-        sig, suggested_moves = player.suggest_moves()
-        if sig is not None:
-            return False
-        moves.add(suggested_moves[0])
-        if continuations & moves:
-            return True
-    return False

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from collections.abc import Collection
 import sys
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -10,7 +11,7 @@ from src.san_chess import SANPlayer
 import numpy as np
 from datetime import datetime
 import math
-from typing import Collection, List, Sequence
+from typing import Collection, List, Sequence, Tuple
 
 class Model(nn.Module):
     def __init__(self,
@@ -267,18 +268,18 @@ class TransformerBlock(nn.Module):
 
 
 class TransformerPlayer(SANPlayer):
+    model: Model
+    model_context_sz: int
+    model_device: str
+    movetensor: torch.Tensor
+    write_idx: int
+    context_exceeded: bool
 
     def __init__(self, model: Model, movelist = ()):
         self.model = model
         self.model_context_sz = self.model.init_params["context_sz"]
         self.model_device = "cuda" if next(model.parameters()).is_cuda else "cpu"
-
-        self.movetensor = torch.zeros((self.model_context_sz,), dtype=torch.uint8, device=self.model_device, requires_grad=False)
-        self.write_idx = 1 # write pointer; 0 is reserved for padding
-
-        self.context_exceeded = False
-
-        self.push_moves(movelist)
+        self.reset(movelist)
 
     def push_moves(self, movelist: Collection[str]):
         if self.context_exceeded:
@@ -297,9 +298,9 @@ class TransformerPlayer(SANPlayer):
             self.movetensor[self.write_idx:self.write_idx+num_tokens] = torch.from_numpy(encd)
             self.write_idx += num_tokens
 
-    def suggest_moves(self, n: int = 1):
+    def suggest_moves(self, n: int = 1) -> Tuple[None | san_chess.PlayerSignal, Sequence[str]]:
         if self.context_exceeded:
-            return
+            return san_chess.PlayerSignal.CONTEXT_OVERFLOW, []
 
         moves = []
         for _ in range(n):
@@ -337,6 +338,19 @@ class TransformerPlayer(SANPlayer):
             moves.append(move)
 
         return None, moves
+
+
+    def reset(self, movelist: Collection[str] = ()):
+        self.movetensor = torch.zeros(
+            (self.model_context_sz,),
+            dtype=torch.uint8,
+            device=self.model_device,
+            requires_grad=False,
+        )
+        self.write_idx = 1 # write pointer; 0 is reserved for padding
+        self.context_exceeded = False
+
+        self.push_moves(movelist)
 
 
 encode_moveline_dict = { c:np.uint8(i) for i,c in enumerate(san_chess.TAN_MOVELINE_CHARS, 1) }
