@@ -222,20 +222,28 @@ class SANPlayer(Protocol):
 
     @abstractmethod
     def __init__(self, movelist: Collection[str] = ()):
-        """Initializes player with an optional movelist."""
+        """
+        Initializes player with an optional movelist.
+        """
 
     @abstractmethod
     def push_moves(self, movelist: Collection[str]):
-        """Pushes moves to the player's internal move stack."""
+        """
+        Pushes moves to the player's internal move stack.
+        """
 
     @abstractmethod
     def suggest_moves(self, n: int = 1) -> Tuple[PlayerSignal | None, Sequence[str]]:
-        """Suggests moves in SAN format. Must not modify move stack."""
+        """
+        Suggests moves in SAN format. Must not modify move stack.
+        """
 
     @abstractmethod
     def reset(self, movelist: Collection[str] = ()):
-        """Resets the player's internal state followed by an initialization
-        with the given movelist."""
+        """
+        Resets the player's internal state followed by an initialization with
+        the given movelist.
+        """
 
 
 class RandomPlayer(SANPlayer):

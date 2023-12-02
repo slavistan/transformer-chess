@@ -4,6 +4,7 @@ import sys
 import torch
 from torch.utils.data import Dataset, DataLoader
 from torch import nn
+import subprocess
 from torch.nn import functional as F
 from src import san_chess
 from src.tools import count_lines_in_file, torch_elem_size
@@ -78,13 +79,23 @@ class Model(nn.Module):
         Trains on data provided by a data loader.
         """
         batch_losses = []
-        def checkpoint():
+        def checkpoint(eval=False):
             nonlocal batch_losses
             nonlocal batch_idx
             loss_mean, loss_std = np.mean(batch_losses), np.std(batch_losses)
             now = str(datetime.now())
             print(f"Batch {batch_idx}: mean batch loss: {loss_mean} +- {loss_std}")
-            self.save(checkpt_dir + "/" + f"checkpt-{now}.pth")
+            checkpt_path = checkpt_dir + "/" + f"checkpt-{now}.pth"
+            self.save(checkpt_path)
+
+            # Trigger detached full eval
+            if eval:
+                print("Starting full eval of model checkpoint in the background ...")
+                subprocess.run(["python", "main.py", "eval", checkpt_path],
+                               start_new_session=True,
+                               check=False,
+                )
+
             batch_losses = []
 
         for batch_idx, (x, y) in enumerate(data_loader, 0):
@@ -93,7 +104,7 @@ class Model(nn.Module):
 
             if checkpoint_every is not None and batch_idx % checkpoint_every == 0:
                 checkpoint()
-        checkpoint()
+        checkpoint(eval=True)
 
 
     def train_batch(self, x, y):

@@ -2,15 +2,19 @@ from typing import Tuple, Callable, TypedDict, Iterable
 from copy import deepcopy
 from collections import defaultdict
 from dataclasses import dataclass
+import subprocess
 import multiprocessing as mp
+import json
 from itertools import repeat
 import logging
 import numpy as np
 import time
 import pandas as pd
 import chess
+import os
 from src.san_chess import SANPlayer, RandomPlayer, Game, play_game, Literal, List
 from src.db_utils import tan_gameline_to_moveline, san_move_to_tan
+from src import vanilla_transformer
 from plotnine import *
 
 
@@ -131,13 +135,15 @@ def one_move_puzzle_from_tan(tan_file: str, *, num_games: int):
             if i >= num_games:
                 break
 
+
 class EvalResult(TypedDict):
     vs_random_as_white: List[Game]
     vs_random_as_black: List[Game]
     vs_self: List[Game]
     one_move_checkmate_puzzles: List[PuzzleResult]
 
-def uber_eval(
+
+def full_eval(
     player: SANPlayer,
     puzzles: List[Tuple[List[str], List[str]]],
     *,
@@ -147,12 +153,7 @@ def uber_eval(
     num_puzzle_attempts=64,  # number of times a puzzle is tried (stochastic players)
     num_workers=1,
 ) -> EvalResult:
-    result: EvalResult = {
-        "vs_random_as_white": [],
-        "vs_random_as_black": [],
-        "vs_self": [],
-        "one_move_checkmate_puzzles": []
-    }
+    result: EvalResult = {"vs_random_as_white": [], "vs_random_as_black": [], "vs_self": [], "one_move_checkmate_puzzles": []}
 
     # Games against random player
     for side in ["white", "black"]:
@@ -305,6 +306,80 @@ def plot_puzzle_len_of_opening_vs_num_legal_moves(puzzle_results: Iterable[Puzzl
         + labs(title="Length of Opening Sequence vs Number of Legal Moves", x="Length of Opening Sequence", y="Number of Legal Moves")
     )
     return plot
+
+
+def make_report(eval_json: str, output: str):
+    """
+    Compiles codebraid markdown.
+    """
+    CODEBRAID_TEMPLATE = "./eval/full-eval-codebraid.md"
+    DATA_FILE_ENVVAR = "DATA_JSON"  # Envvar containing path to data file.
+
+    # Set PYTHONPATH to current working directory, as corebraid will create and
+    # switch to a temporary directory, losing the option to import out local
+    # './src' modules.
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.getcwd() + "" if env.get("PYTHONPATH") is None else ":" + env["PYTHONPATH"]
+    env[DATA_FILE_ENVVAR] = eval_json
+
+    result = subprocess.run(
+        [
+            "codebraid",
+            "pandoc",
+            "--no-cache",
+            "--overwrite",
+            "--from",
+            "markdown",
+            "--to",
+            "pdf",
+            "-o",
+            output,
+            CODEBRAID_TEMPLATE,
+        ],
+        env=env,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    return result
+
+
+def full_eval_transformer(
+    pth_file: str,
+    data_output_path: str,
+    report_output_path: str,
+    *,
+    num_random=64,
+    num_self=64,
+    num_puzzles=256,
+    num_puzzle_attempts=64,
+    num_workers=1,
+    num_tries=8,
+):
+    # TODO: machine-independent way of storing puzzles
+    puzzles = list(
+        one_move_puzzle_from_tan(
+            "./data/2309-checkmate.tan",
+            num_games=num_puzzles,
+        )
+    )
+
+    m = vanilla_transformer.Model.load(pth_file).to("cpu")
+    player = vanilla_transformer.TransformerPlayer(m)
+    eval_results = full_eval(
+        player,
+        puzzles,
+        num_random=num_random,
+        num_self=num_self,
+        num_puzzle_attempts=num_puzzle_attempts,
+        num_tries=num_tries,
+        num_workers=num_workers,
+    )
+
+    with open(data_output_path, "w") as f:
+        json.dump(eval_results, f, indent=4, default=str)
+
+    return make_report(data_output_path, report_output_path)
 
 
 # TODO: num_retries off-by-one Verhalten angleichen. Parameter sollte Anzahl der Iterationen angeben.

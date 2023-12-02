@@ -3,5 +3,8 @@
 /*scratchpad*
 /.pytest_cache
 
+# codebraid cache
+/_codebraid
+
 # drawio backup files
 /.$*bkp

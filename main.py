@@ -18,40 +18,55 @@ logging.basicConfig(
 def eval(
     pth_file: str,
     *,
-    output=None,
+    output_dir=None,
     num_random=16,
     num_self=16,
-    num_puzzle=64
+    num_puzzle=64,
+    num_puzzle_attempts=16,
+    num_tries=8, # tries to generate a valid move (transformer player)
+    num_workers=1,
 ):
-    if output is None:
-        # TODO: report-001, report-002 ... Namenskonflikte abfangen
-        output = pth_file + "-report.pdf"
+    """
+    Evaluates the performance of a transformer player.
 
-    m = vanilla_transformer.Model.load(pth_file).to("cpu")
-    p = vanilla_transformer.TransformerPlayer(m)
+    :param pth_file: Path to vanilla_transformer.Model checkpoint.
+    :param output_data: Where to store the evaluation metrics in json format.
+    :param output_pdf: Where to store the generated report in pdf format.
+    :num_random: number of games to player against random player.
+    :num_self: number of games to player against self.
+    :num_puzzle: number of one-move checkmate puzzles to player.
+    :num_puzzle_attempts: number of attempts per puzzle.
+    :num_tries: number of tries to generate a valid move (relevant for transformer players).
+    :num_workers: number of cpus for multiprocessing.
+    """
 
-    result = {}
+    if output_dir is None:
+        output_dir = pth_file + f"-eval-{int(time.time())}"
+    os.makedirs(output_dir, mode=0o755, exist_ok=True)
 
-    # Games against random player
-    for side in ["white", "black"]:
-        start = time.time()
-        logging.info(f"Playing {num_random} games against random player as {side} ... ")
-        result[f"vs-random-as-{side}"] = performance.vs_random(
-            p,
-            num_games=num_random,
-            num_retries=8,
-            play_as=side,
-            num_workers=2,
-        )
-        logging.info(f"Done after {int(time.time() - start)}s.")
+    output_data_path = f"{output_dir}/eval.json"
+    output_pdf_path = f"{output_dir}/eval.pdf"
+    stdout_path = f"{output_dir}/stdout"
+    stderr_path = f"{output_dir}/stderr"
 
-    # Games against self
-    logging.info(f"Playing {num_self} games against self ... ")
-    result["vs-self"] = performance.vs_self(
-        p,
-        num_games=num_self,
-        num_retries=8
+    result = performance.full_eval_transformer(
+        pth_file=pth_file,
+        data_output_path=output_data_path,
+        report_output_path=output_pdf_path,
+        num_random=num_random,
+        num_self=num_self,
+        num_puzzles=num_puzzle,
+        num_puzzle_attempts=num_puzzle_attempts,
+        num_tries=num_tries,
+        num_workers=num_workers,
     )
+
+    with open(stdout_path, "wb") as f:
+        f.write(result.stdout)
+    with open(stderr_path, "wb") as f:
+        f.write(result.stderr)
+    print(f"Done. Output directory: '{output_dir}'")
+
 
 
 
@@ -130,6 +145,7 @@ def main():
             filter_tan.__name__: filter_tan,
             pgn_to_tan.__name__: pgn_to_tan,
             play_model.__name__: play_model,
+            eval.__name__: eval,
         }
     )
 
