@@ -3,17 +3,15 @@ from __future__ import annotations
 import tkinter as tk
 from copy import deepcopy
 from collections.abc import Collection
-from abc import ABC, abstractmethod
 import random
-from typing import List, Tuple, Sequence, Literal, Set, Protocol, TypedDict
+from abc import abstractmethod
+from typing import Sequence, Literal, Protocol, TypedDict, NewType
 import io
 import enum
-from dataclasses import dataclass
 from frozendict import frozendict
 import chess
 import chess.svg
 import cairosvg
-import numpy as np
 from PIL import Image, ImageTk
 
 # Characters required to express a single move in TAN format, e.g. 'a4', 'Qxb4'
@@ -45,6 +43,15 @@ TAN_MAX_MOVE_LEN = len("Qa1xg3")
 
 SAN_MOVE_ANNOTATION_POSTFIX = "?!+#"
 
+# Declarative types representing a move in standard or trimmed algebraic
+# notation
+SANMove = NewType("SANMove", str)
+TANMove = NewType("TANMove", SANMove)
+
+# Movelists represent a sequence of moves from the starting position.
+SANMoveList = NewType("SANMoveList", Sequence[SANMove])
+TANMoveList = NewType("TANMoveList", Sequence[TANMove])
+
 
 @enum.unique
 class Outcome(enum.Flag):
@@ -60,7 +67,7 @@ class Outcome(enum.Flag):
     BLACK_WINS_CHECKMATE = enum.auto()
     """Black wins by checkmating white."""
 
-    BLACK_WINS_DISQUALIFICATION = enum.auto()
+    BLACK_WINS_DQ_INVALID_MOVE = enum.auto()
     """Black wins due to disqualification of white for suggesting invalid moves."""
 
     DRAW_STALEMATE = enum.auto()
@@ -81,8 +88,16 @@ class Outcome(enum.Flag):
     BLACK_WINS_RESIGNATION_CONTEXT_OVERFLOW = enum.auto()
     """See corresponding PlayerSignal."""
 
+    WHITE_WINS_RESIGNATION_CANT_CONSTRUCT_MOVE = enum.auto()
+    BLACK_WINS_RESIGNATION_CANT_CONSTRUCT_MOVE = enum.auto()
+    """See corresponding PlayerSignal."""
+
     WHITE_WINS_RESIGNATION_ABANDONED_GAME = enum.auto()
     BLACK_WINS_RESIGNATION_ABANDONED_GAME = enum.auto()
+    """See corresponding PlayerSignal."""
+
+    WHITE_WINS_RESIGNATION_NO_LEGAL_MOVES = enum.auto()
+    BLACK_WINS_RESIGNATION_NO_LEGAL_MOVES = enum.auto()
     """See corresponding PlayerSignal."""
 
     # Aliases to define comfy helpers.
@@ -92,7 +107,7 @@ class Outcome(enum.Flag):
     WHITE_WINS = WHITE_WINS_CHECKMATE | WHITE_WINS_DISQUALIFICATION | WHITE_WINS_RESIGNATION_DIVERGED_FROM_PRESET | WHITE_WINS_RESIGNATION_CONTEXT_OVERFLOW | WHITE_WINS_RESIGNATION_ABANDONED_GAME
     """White won the game."""
 
-    BLACK_WINS = BLACK_WINS_CHECKMATE | BLACK_WINS_DISQUALIFICATION | BLACK_WINS_RESIGNATION_DIVERGED_FROM_PRESET | BLACK_WINS_RESIGNATION_CONTEXT_OVERFLOW | BLACK_WINS_RESIGNATION_ABANDONED_GAME
+    BLACK_WINS = BLACK_WINS_CHECKMATE | BLACK_WINS_DQ_INVALID_MOVE | BLACK_WINS_RESIGNATION_DIVERGED_FROM_PRESET | BLACK_WINS_RESIGNATION_CONTEXT_OVERFLOW | BLACK_WINS_RESIGNATION_ABANDONED_GAME
     """Black won the game."""
 
     CHECKMATE = WHITE_WINS_CHECKMATE | BLACK_WINS_CHECKMATE
@@ -104,7 +119,7 @@ class Outcome(enum.Flag):
     DRAW_CLAIMED = DRAW_FIFTY_MOVES | DRAW_THREEFOLD_REPETITION
     """Game ended in a draw, claimed by one of the players."""
 
-    DISQUALIFICATION = WHITE_WINS_DISQUALIFICATION | BLACK_WINS_DISQUALIFICATION
+    DISQUALIFICATION = WHITE_WINS_DISQUALIFICATION | BLACK_WINS_DQ_INVALID_MOVE
     """Game ended due to disqualification, for example due to repeatedly
     suggesting invalid moves."""
 
@@ -145,15 +160,11 @@ _termination_to_outcome = {
 class Game(TypedDict):
     """Outcome, details and statistics of a played game."""
 
-    moves: List[str]
+    moves: SANMoveList
     """Moves played in the game."""
 
     num_opening_moves: int
     """The number of moves that were provided as an opening sequence."""
-
-    retries: List[int]
-    """Tracks the number of retries that were needed to generate a valid move.
-    One entry per move."""
 
     outcome: Outcome
 
@@ -198,7 +209,8 @@ class Game(TypedDict):
 
 @enum.unique
 class PlayerSignal(enum.Enum):
-    """Signal communicated by players in addition to their moves."""
+    """Signal communicated by players alternative to their move."""
+
     # TODO: Signale auf Seite der Player definieren, aber hier auflisten
 
     ABANDONED_GAME = enum.auto()
@@ -213,6 +225,9 @@ class PlayerSignal(enum.Enum):
     CONTEXT_OVERFLOW = enum.auto()
     """Transformer: context size exceeded."""
 
+    CANT_CONSTRUCT_MOVE = enum.auto()
+    """Transformer: couldn't synthesize a valid move."""
+
 
 class SANPlayer(Protocol):
     """Chess player interface."""
@@ -224,19 +239,21 @@ class SANPlayer(Protocol):
     info = {}
 
     @abstractmethod
-    def __init__(self, movelist: Collection[str] = ()):
+    def __init__(self, movelist: SANMoveList = SANMoveList(())):
         """
         Initializes player with an optional movelist.
         """
 
     @abstractmethod
-    def push_moves(self, movelist: Collection[str]):
+    def push_moves(self, movelist: SANMoveList):
+        # TODO: Sollte alles TAN sein hier, nicht SAN
         """
-        Pushes moves to the player's internal move stack.
+        Pushes moves to the player's internal move stack. The moves are
+        guaranteed to be valid.
         """
 
     @abstractmethod
-    def suggest_moves(self, n: int = 1) -> Tuple[PlayerSignal | None, Sequence[str]]:
+    def suggest_move(self) -> PlayerSignal | SANMove:
         """
         Suggests moves in SAN format. Must not modify move stack.
 
@@ -245,7 +262,7 @@ class SANPlayer(Protocol):
         """
 
     @abstractmethod
-    def reset(self, movelist: Collection[str] = ()):
+    def reset(self, movelist: SANMoveList = SANMoveList(())):
         """
         Resets the player's internal state followed by an initialization with
         the given movelist.
@@ -256,86 +273,66 @@ class RandomPlayer(SANPlayer):
     """Plays random valid moves, optionally generating invalid moves."""
 
     board: chess.Board
-    p_invalid: float
     rng: random.Random
-    info: dict
 
     def __init__(
         self,
-        movelist: Collection[str] = (),
+        movelist: SANMoveList = SANMoveList(()),
         *,
-        p_invalid: float = 0.0,
         rng: random.Random = random.Random(),
     ):
         self.rng = rng
-        self.reset(movelist, p_invalid=p_invalid)
+        self.reset(movelist)
 
-    def push_moves(self, movelist: Collection[str]):
+    def push_moves(self, movelist: SANMoveList):
         for move in movelist:
             self.board.push_san(move)
 
-    def suggest_moves(self, n: int = 1):
+    def suggest_move(self) -> Literal[PlayerSignal.NO_LEGAL_MOVES] | SANMove:
         legal_moves = list(self.board.legal_moves)
         if len(legal_moves) == 0:
-            return PlayerSignal.NO_LEGAL_MOVES, ()
+            return PlayerSignal.NO_LEGAL_MOVES
 
-        moves: List[str] = []
-        for _ in range(n):
-            # Generate invalid SAN move.
-            if self.rng.random() < self.p_invalid:
-                moves.append("Z")
-                continue
+        move_uci = self.rng.choice(legal_moves)
+        move_san = uci_to_san(move_uci, self.board)
+        return move_san
 
-            move_uci = self.rng.choice(legal_moves)
-            # Hack to generate a move in san notation:
-            # this will produce a continuation for black: '11...Rg8'
-            # or a move for white: '3. Qd3'.
-            variation = self.board.variation_san([move_uci])
-            movepos = variation.rfind(".")
-            if variation[movepos + 1] == " ":
-                move = variation[movepos + 2 :]
-            else:
-                move = variation[movepos + 1 :]
-            move = move.rstrip(SAN_MOVE_ANNOTATION_POSTFIX)  # strip annotations
-            moves.append(move)
-        return None, moves
-
-    def reset(self, movelist: Collection[str] = (), *, p_invalid: float = 0.0):
+    def reset(self, movelist: SANMoveList = SANMoveList(())):
         self.board = chess.Board()
-        self.p_invalid = p_invalid
         self.push_moves(movelist)
-        self.info = {
-            f"{movelist=}".split("=")[0]: list(movelist),
-            f"{p_invalid=}".split("=")[0]: p_invalid,
-        }
 
 
 class PresetPlayer(SANPlayer):
-    """Plays preset moves. Used for testing via fixed sequences of moves.
-    Aborts game if preset sequence of moves is exceeded. It's not checked
-    whether the pushed moves match those in the preset movelist."""
+    """
+    Picks moves from a preset sequence. Used for testing. Aborts game via
+    signal if pushed moves diverge from or exceed preset sequence.
+    """
 
-    moves: List[str]
+    movelist: SANMoveList
     move_idx: int
+    diverged_from_preset: bool
 
     def __init__(
         self,
-        movelist: Collection[str] = (),
+        movelist: SANMoveList = SANMoveList(()),
     ):
         self.reset(movelist)
 
-    def push_moves(self, movelist: Collection[str]):
+    def push_moves(self, movelist: SANMoveList):
+        if self.movelist[self.move_idx : self.move_idx + len(movelist)] != movelist:
+            self.diverged_from_preset = True
+            return
         self.move_idx += len(movelist)
 
-    def suggest_moves(self, n: int = 1):
-        if self.move_idx >= len(self.moves):
-            return PlayerSignal.DIVERGED_FROM_PRESET, []
-        return None, [self.moves[self.move_idx]] * n
+    def suggest_move(self) -> Literal[PlayerSignal.DIVERGED_FROM_PRESET] | SANMove:
+        if self.diverged_from_preset or self.move_idx >= len(self.movelist):
+            return PlayerSignal.DIVERGED_FROM_PRESET
+        return self.movelist[self.move_idx]
 
-    def reset(self, movelist: Collection[str] = ()):
-        self.moves = list(movelist)
+    def reset(self, movelist: SANMoveList = SANMoveList(())):
+        self.movelist = movelist
         self.move_idx = 0
-        self.info[f"{movelist=}".split("=")[0]] = list(movelist)
+        self.diverged_from_preset = False
 
 
 class GUIPlayer(SANPlayer):
@@ -356,8 +353,7 @@ class GUIPlayer(SANPlayer):
         # the canvas being empty.See https://stackoverflow.com/questions/2223985
         self.tk_img = None
 
-        self.sig = None
-        self.move = None
+        self.sig: PlayerSignal | SANMove | None = None
         self.input_waiting = tk.BooleanVar()
 
         self.board = chess.Board()
@@ -372,14 +368,14 @@ class GUIPlayer(SANPlayer):
             self.board.push_san(move)
         self.draw_board()
 
-    def suggest_moves(self, n: int = 1):
+    def suggest_move(self) -> PlayerSignal | SANMove:
         self.root.wait_variable(self.input_waiting)
-        sig, moves = self.sig, [self.move]
-        return sig, moves
+        if self.sig is not None:
+            return self.sig
+        raise NotImplementedError("this code path should never be reached")
 
     def close(self, _event):
         self.sig = PlayerSignal.ABANDONED_GAME
-        self.move = None
         self.root.destroy()
         self.input_waiting.set(True)
 
@@ -387,6 +383,8 @@ class GUIPlayer(SANPlayer):
         # Draw the chess board using SVG. We have to convert to PGN first.
         svg_data = chess.svg.board(board=self.board, coordinates=False, **kwargs)
         png_data = cairosvg.svg2png(bytestring=svg_data, output_width=self.board_sz, output_height=self.board_sz)
+        if not isinstance(png_data, bytes):
+            raise ValueError("couldn't create SVG")
         img = Image.open(io.BytesIO(png_data))
         img = img.resize((self.board_sz, self.board_sz), Image.LANCZOS)
         self.tk_img = ImageTk.PhotoImage(img)
@@ -414,16 +412,18 @@ class GUIPlayer(SANPlayer):
                     # this will produce a continuation for black: '11...Rg8'
                     # or a move for white: '3. Qd3'. This has to be done
                     # before pushing to the board.
+                    # TODO: Move this to a helper
                     variation = self.board.variation_san([move_uci])
                     movepos = variation.rfind(".")
+                    move_san: SANMove
                     if variation[movepos + 1] == " ":
-                        move_tan = variation[movepos + 2 :]
+                        move_san = SANMove(variation[movepos + 2 :])
                     else:
-                        move_tan = variation[movepos + 1 :]
-                    move_tan = move_tan.rstrip(SAN_MOVE_ANNOTATION_POSTFIX)  # strip annotations
+                        move_san = SANMove(variation[movepos + 1 :])
 
-                    self.sig = None
-                    self.move = move_tan
+                    move: TANMove = strip(move_san)
+
+                    self.sig = move
                     self.input_waiting.set(True)
 
             self.selected_square = None
@@ -440,50 +440,20 @@ def play_game(
     white: SANPlayer,
     black: SANPlayer | None = None,
     *,
-    opening_moves: Collection[str] = (),
-    num_retries: Tuple[int, int] | int = 0, # num of retries for white and black to produce a valid move
-    retry_strategy: Literal["eager", "lazy"] = "lazy",
+    opening_moves: SANMoveList = SANMoveList(()),
 ) -> Game:
     """Plays a game with one or two players, returning a result and game
     statistics. No draws can be claimed to make the outcome deterministic."""
 
-    def get_move(num_retries: int, players_idx: int):
-        if retry_strategy == "eager":
-            sig, moves = players[players_idx].suggest_moves(num_retries + 1)
-            if sig is None and len(moves) == 0:
-                # TODO: Incorporate check for moves into function body. Make it result in a forfeit.
-                raise ValueError("No moves suggested")
-            if len(moves) > 0:
-                for m in moves:
-                    yield sig, m
-            else:
-                yield sig, []
+    # TODO: Game sollte einfach das chess.Board zurückgeben, aus dem die Züge rekonstruiert werden können.
+    #       - Teste ob das geht, und Helper schreiben, der aus board die SAN Züge extrahiert
+    #       - Muss gucken, wie json-serialisierbarkeit erhalten werden kann
 
-        else:
-            for _ in range(num_retries + 1):
-                sig, moves = players[players_idx].suggest_moves(1)
-                if sig is None and len(moves) == 0:
-                    raise ValueError("No moves suggested")
-
-                yield sig, moves[0] if len(moves) > 0 else []
-
-    moves = list(opening_moves)
-    retries = [0] * len(opening_moves)
+    # TODO: Game muss jetzt optionale Spielerstatistiken speichern können
 
     # Players used to index via booleans, as used by python's chess library.
     # (black, white) for two players, otherwise (white)
     players = ([black] if black is not None else []) + [white]
-
-    # One num_retry per player as a tuple, or one int num_retry for both players.
-    # Results in a tuple of two ints, (black, white).
-    if isinstance(num_retries, int):
-        num_retries = (num_retries, num_retries)
-    elif isinstance(num_retries, tuple) and len(num_retries) == 1 and len(players) == 1:
-        num_retries = (num_retries[0], num_retries[0])
-    elif isinstance(num_retries, tuple) and len(num_retries) == 2 and len(players) == 2:
-        num_retries = (num_retries[1], num_retries[0])
-    else:
-        raise ValueError(f"Invalid num_retries: {num_retries}")
 
     # Set up board and play opening moves.
     board = chess.Board()
@@ -492,80 +462,58 @@ def play_game(
             board.push_san(move)
     except ValueError:
         return {
-            "moves": moves,
+            "moves": opening_moves,
             "num_opening_moves": len(opening_moves),
-            "retries": retries,
             "outcome": Outcome.ABORT_INVALID_OPENING,
         }
-    for p in players:
-        p.push_moves(moves)
 
+    for p in players:
+        p.push_moves(opening_moves)
+
+    moves = deepcopy(list(opening_moves))
     while True:
         # Check if game has ended.
         outcome = board.outcome()
-        num_retries_move = num_retries[board.turn]
         if outcome is not None:
             return {
-                "moves": moves,
+                "moves": SANMoveList(moves),
                 "num_opening_moves": len(opening_moves),
-                "retries": retries,
                 "outcome": Outcome.from_outcome(outcome),
             }
 
         # Get a move suggestions, validate and push it.
-        found_move_after_retries = False
         players_idx = board.turn & (len(players) - 1)  # picks the correct player index
-
-        retry = 0
-        for retry, (signal, move) in enumerate(get_move(num_retries_move, players_idx)):
-            # Handle signals.
-            if signal is not None:
-                if signal == PlayerSignal.DIVERGED_FROM_PRESET:
-                    if board.turn == chess.WHITE:
-                        outcome = Outcome.BLACK_WINS_RESIGNATION_DIVERGED_FROM_PRESET
-                    else:
-                        outcome = Outcome.WHITE_WINS_RESIGNATION_DIVERGED_FROM_PRESET
-                elif signal == PlayerSignal.CONTEXT_OVERFLOW:
-                    if board.turn == chess.WHITE:
-                        outcome = Outcome.BLACK_WINS_RESIGNATION_CONTEXT_OVERFLOW
-                    else:
-                        outcome = Outcome.WHITE_WINS_RESIGNATION_CONTEXT_OVERFLOW
-                elif signal == PlayerSignal.ABANDONED_GAME:
-                    if board.turn == chess.WHITE:
-                        outcome = Outcome.BLACK_WINS_RESIGNATION_ABANDONED_GAME
-                    else:
-                        outcome = Outcome.WHITE_WINS_RESIGNATION_ABANDONED_GAME
-                else:
-                    raise NotImplementedError(f"Unknown signal: {signal}")
+        response = players[players_idx].suggest_move()
+        if isinstance(response, SANMove):
+            move = response
+            if not is_valid(move, board):
+                outcome = Outcome.BLACK_WINS_DQ_INVALID_MOVE if board.turn else Outcome.WHITE_WINS_DISQUALIFICATION
                 return {
-                    "moves": moves,
+                    "moves": SANMoveList(moves),
                     "num_opening_moves": len(opening_moves),
-                    "retries": retries,
                     "outcome": outcome,
                 }
-
-            try:
-                board.push_san(move)
-            except (chess.InvalidMoveError, chess.IllegalMoveError, chess.AmbiguousMoveError):
-                continue
-
-            moves.append(move)
-            for p in players:
-                p.push_moves([move])
-            found_move_after_retries = True
-            break
-
-        if not found_move_after_retries:
-            outcome = Outcome.BLACK_WINS_DISQUALIFICATION if board.turn else Outcome.WHITE_WINS_DISQUALIFICATION
-            return {"moves": moves, "num_opening_moves": len(opening_moves), "retries": retries, "outcome": outcome}
-
-        retries.append(retry)
+            else:
+                moves.append(move)
+                for p in players:
+                    p.push_moves(SANMoveList([move]))
+        else:
+            # Handle signals.
+            # TODO: move signal handling to function
+            signal = response
+            outcome = outcome_from_signal(signal, board.turn)
+            return {
+                "moves": SANMoveList(moves),
+                "num_opening_moves": len(opening_moves),
+                "outcome": outcome,
+            }
 
 
-def get_outcome(san_movelist: Collection[str]) -> Outcome:
+def get_outcome(san_movelist: SANMoveList) -> Outcome:
     """Returns a game's outcome by playing it out by a PresetPlayer.
     Inconclusive games will result in a resignation signal."""
-    game = play_game(PresetPlayer([]), opening_moves=san_movelist)
+    # TODO: Was, wenn Spiel nicht terminiert? play_game kann hier so nicht verwendet werden.
+    game = play_game(PresetPlayer(), opening_moves=san_movelist)
     return game["outcome"]
 
 
@@ -597,8 +545,88 @@ conclusive_games = frozendict(
 )
 
 
+# TODO: test
+def is_valid(
+    move: SANMove | TANMove | str,
+    board: chess.Board,
+) -> bool:
+    """
+    Returns true if the move is valid, given a position. The `board` object is
+    not modified.
+
+    :param move: move in standard algebraic notation
+    :param board: chess.board object representing the position
+    """
+
+    # Pychess doesn't offer a method to check the validity of a move in SAN
+    # notation, so we have to call push_san() directly and look for exceptions.
+    # However, we must not modify the move stack and thus do this on a copy of
+    # the board.
+    board_cp = deepcopy(board)
+    try:
+        board_cp.push_san(move)
+    except ValueError:
+        return False
+    return True
+
+
 def tan_moveline_from_gameline(tan_gameline: str) -> str:
     tan_gameline = tan_gameline.rstrip()
     if tan_gameline.endswith(TAN_EOG_CHARS):
         return tan_gameline[:-2]  # strip eog char and trailing whitespace
     return tan_gameline
+
+
+def strip(move: SANMove) -> TANMove:
+    """
+    Strips annotations from a SANMove.
+
+    Returns a TANMove.
+    """
+    result = move.rstrip(SAN_MOVE_ANNOTATION_POSTFIX)
+    return TANMove(SANMove(result))
+
+
+def uci_to_san(move_uci: chess.Move, board: chess.Board) -> SANMove:
+    # Hack to generate a move in san notation: this will produce a continuation
+    # for black, e.g. '11...Rg8' or a move for white: '3. Qd3'.
+    variation = board.variation_san([move_uci])
+    movepos = variation.rfind(".")
+    if variation[movepos + 1] == " ":
+        move = SANMove(variation[movepos + 2 :])
+    else:
+        move = SANMove(variation[movepos + 1 :])
+
+    return SANMove(move)
+
+
+def outcome_from_signal(signal: PlayerSignal, turn: chess.Color) -> Outcome:
+    if signal == PlayerSignal.DIVERGED_FROM_PRESET:
+        if turn == chess.WHITE:
+            return Outcome.BLACK_WINS_RESIGNATION_DIVERGED_FROM_PRESET
+        return Outcome.WHITE_WINS_RESIGNATION_DIVERGED_FROM_PRESET
+
+    if signal == PlayerSignal.CONTEXT_OVERFLOW:
+        if turn == chess.WHITE:
+            return Outcome.BLACK_WINS_RESIGNATION_CONTEXT_OVERFLOW
+        return Outcome.WHITE_WINS_RESIGNATION_CONTEXT_OVERFLOW
+
+    if signal == PlayerSignal.ABANDONED_GAME:
+        if turn == chess.WHITE:
+            return Outcome.BLACK_WINS_RESIGNATION_ABANDONED_GAME
+        return Outcome.WHITE_WINS_RESIGNATION_ABANDONED_GAME
+
+    if signal == PlayerSignal.CANT_CONSTRUCT_MOVE:
+        if turn == chess.WHITE:
+            return Outcome.BLACK_WINS_RESIGNATION_CANT_CONSTRUCT_MOVE
+        return Outcome.WHITE_WINS_RESIGNATION_CANT_CONSTRUCT_MOVE
+
+    if signal == PlayerSignal.NO_LEGAL_MOVES:
+        if turn == chess.WHITE:
+            return Outcome.BLACK_WINS_RESIGNATION_NO_LEGAL_MOVES
+        return Outcome.WHITE_WINS_RESIGNATION_NO_LEGAL_MOVES
+
+    raise NotImplementedError(f"Unknown signal: {signal}")
+
+
+# TODO: SAN.. komplett rausschmeißen, falls möglich

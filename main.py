@@ -116,25 +116,21 @@ def play_model(
     *,
     device="cuda" if cuda.is_available() else "cpu",
     side="white",
-    num_retries=8,
 ):
     """Plays a chess game against a model.
 
     :param pth_file: Path to model file.
     :param device: Device to run model on.
     :param side: Side to play as, either 'white' or 'black'.
-    :param num_retries: Number of retries to allow the transformer for each move.
     """
 
     m = vanilla_transformer.Model.load(pth_file).to(device)
     model_player = vanilla_transformer.TransformerPlayer(m)
     gui_player = san_chess.GUIPlayer()
     players = [gui_player, model_player]
-    retries = (0, num_retries)
     if side == "black":
         players = players[::-1]
-        retries = retries[::-1]
-    san_chess.play_game(*players, num_retries=retries)
+    san_chess.play_game(*players)
     # TODO: Preserve window after game ends and show result. Probably needs a
     # different setup for playing games altogehter.
 

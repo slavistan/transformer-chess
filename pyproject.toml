@@ -5,7 +5,7 @@ recursive = true
 
 [tool.pylint.messages_control]
 max-line-length = 9999
-disable = ['W0511', 'W1514', 'R0914', 'R0902', 'C0103', 'C0114', 'C0116', 'C0115', 'W1203']
+disable = ['W0511', 'W1514', 'R0914', 'R0902', 'C0103', 'R0911', 'C0114', 'C0116', 'C0115', 'W1203']
 
 [tool.pylint.typecheck]
 generated-members = 'numpy.*,torch.*'

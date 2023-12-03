@@ -95,6 +95,7 @@ _san_movetext_re = [
 
 _san_movetext_eog_to_tan = {"1-0": "W", "0-1": "S", "1/2-1/2": "U", " *": ""}  # incomplete games are denoted by an asterisk
 
+# TODO: Remove (macht das gleiche wie san_chess.strip)
 def san_move_to_tan(san_move: str) -> str:
     return _san_movetext_re[2].sub("", san_move)
 

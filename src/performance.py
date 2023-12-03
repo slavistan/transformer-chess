@@ -1,4 +1,4 @@
-from typing import Tuple, Callable, TypedDict, Iterable
+from typing import Tuple, Callable, TypedDict, Iterable, LiteralString, cast, Any, Set
 from copy import deepcopy
 from collections import defaultdict
 from dataclasses import dataclass
@@ -12,7 +12,7 @@ import time
 import pandas as pd
 import chess
 import os
-from src.san_chess import SANPlayer, RandomPlayer, Game, play_game, Literal, List
+from src.san_chess import SANPlayer, SANMoveList, SANMove, RandomPlayer, Game, play_game, Literal, List, PlayerSignal, strip, is_valid
 from src.db_utils import tan_gameline_to_moveline, san_move_to_tan
 from src import vanilla_transformer
 from plotnine import *
@@ -31,8 +31,6 @@ def _vs_random(
     num_games: int,
     *,
     play_as: Literal["white", "black"] = "white",
-    num_retries: int = 0,
-    retry_strategy: Literal["eager", "lazy"] = "lazy",
 ) -> List[Game]:
     results: List[Game] = []
     random_player = RandomPlayer()
@@ -44,7 +42,7 @@ def _vs_random(
     for _ in range(num_games):
         player.reset()
         random_player.reset()
-        game_result = play_game(*players, num_retries=num_retries, retry_strategy=retry_strategy)
+        game_result = play_game(*players)
         results.append(game_result)
 
     return results
@@ -53,14 +51,11 @@ def _vs_random(
 def vs_self(
     player: SANPlayer,
     num_games: int,
-    *,
-    num_retries: int = 0,
-    retry_strategy: Literal["eager", "lazy"] = "lazy",
 ) -> List[Game]:
     results: List[Game] = []
     for _ in range(num_games):
         player.reset()
-        game_result = play_game(player, num_retries=num_retries, retry_strategy=retry_strategy)
+        game_result = play_game(player)
         results.append(game_result)
     return results
 
@@ -68,8 +63,8 @@ def vs_self(
 # TODO: Test
 def one_move_puzzle(
     player: SANPlayer,
-    movelist: List[str],
-    candidate_moves: List[str],
+    movelist: SANMoveList,
+    candidate_moves: Set[SANMove],
     *,
     num_attempts: int = 1,  # rerun puzzle, relevant for stochastic players
     num_tries: int = 1,  # number of tries until a valid move is returned, relevant for transformer players
@@ -83,13 +78,13 @@ def one_move_puzzle(
     num_legal = len(list(board.legal_moves))
 
     for _ in range(num_attempts):
-        move_suggestion = ""
+        move_tan = ""
         suggested_legal_move = False
         for _ in range(num_tries):
-            sig, suggestions = player.suggest_moves(1)
-            if sig is not None:
+            move = player.suggest_move()
+            if isinstance(move, PlayerSignal):
                 continue
-            move_suggestion = san_move_to_tan(suggestions[0])
+            move_tan = strip(move)
 
             # Check if move is legal. Pychess doesn't offer a method to check
             # the validity of a move in SAN notation, so we have to call
@@ -97,14 +92,14 @@ def one_move_puzzle(
             # modify the move stack and thus keep a buffer of the board.
             board_buf = deepcopy(board)
             try:
-                board.push_san(move_suggestion)
+                board.push_san(move_tan)
             except ValueError:
                 continue
             board = board_buf
-            suggested_legal_move = True
+            suggested_legal_move = is_valid(move_tan, board)
             break
 
-        if suggested_legal_move and move_suggestion in candidate_moves:
+        if suggested_legal_move and move_tan in candidate_moves:
             counter += 1
 
     return {
@@ -153,13 +148,19 @@ def full_eval(
     num_puzzle_attempts=64,  # number of times a puzzle is tried (stochastic players)
     num_workers=1,
 ) -> EvalResult:
-    result: EvalResult = {"vs_random_as_white": [], "vs_random_as_black": [], "vs_self": [], "one_move_checkmate_puzzles": []}
+    result: EvalResult = {
+        "vs_random_as_white": [],
+        "vs_random_as_black": [],
+        "vs_self": [],
+        "one_move_checkmate_puzzles": [],
+    }
 
     # Games against random player
-    for side in ["white", "black"]:
+    for side in ("white", "black"):
         start = time.time()
         logging.info(f"Playing {num_random} games as {side} against random player ... ")
-        result[f"vs_random_as_{side}"] = vs_random(
+        k = cast(Literal["vs_random_as_white", "vs_random_as_black"], f"vs_random_as_{side}")
+        result[k] = vs_random(
             player,
             num_games=num_random,
             num_retries=num_tries - 1,
@@ -171,11 +172,7 @@ def full_eval(
     # Games against self
     logging.info(f"Playing {num_self} games against self ... ")
     start = time.time()
-    result["vs_self"] = vs_self(
-        player,
-        num_games=num_self,
-        num_retries=num_tries - 1,
-    )
+    result["vs_self"] = vs_self(player, num_self)
     logging.info(f"Done after {int(time.time() - start)}s.")
 
     # One-Move Puzzles

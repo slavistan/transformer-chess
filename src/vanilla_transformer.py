@@ -1,42 +1,28 @@
 from __future__ import annotations
-from collections.abc import Collection
 import sys
-import torch
-from torch.utils.data import Dataset, DataLoader
-from torch import nn
 import subprocess
-from torch.nn import functional as F
-from src import san_chess
-from src.tools import count_lines_in_file, torch_elem_size
-from src.san_chess import SANPlayer
-import numpy as np
 from datetime import datetime
 import math
-from typing import Collection, List, Sequence, Tuple
+from typing import Sequence, Literal
+
+import numpy as np
+import torch
+from torch.utils.data import Dataset
+from torch import nn
+from torch.nn import functional as F
+import chess
+
+from src import san_chess
+from src.tools import count_lines_in_file, torch_elem_size
+from src.san_chess import PlayerSignal, SANPlayer, TANMoveList, TANMove, SANMove
+
 
 class Model(nn.Module):
-    def __init__(self,
-        vocab_sz,
-        context_sz,
-        embd_dim,
-        num_heads,
-        num_transformer_blocks,
-        head_sz,
-        lr,
-        *,
-        device=None):
+    def __init__(self, vocab_sz, context_sz, embd_dim, num_heads, num_transformer_blocks, head_sz, lr, *, device=None):
         super().__init__()
 
         # Store params for saving and loading.
-        self.init_params = {
-            "vocab_sz": vocab_sz,
-            "context_sz": context_sz,
-            "embd_dim": embd_dim,
-            "num_heads": num_heads,
-            "num_transformer_blocks": num_transformer_blocks,
-            "head_sz": head_sz,
-            "lr": lr
-        }
+        self.init_params = {"vocab_sz": vocab_sz, "context_sz": context_sz, "embd_dim": embd_dim, "num_heads": num_heads, "num_transformer_blocks": num_transformer_blocks, "head_sz": head_sz, "lr": lr}
 
         # Token embedding layer
         self.tok_embd = nn.Embedding(vocab_sz, embd_dim)
@@ -45,10 +31,7 @@ class Model(nn.Module):
         self.pos_embd = nn.Embedding(context_sz, embd_dim)
 
         # Transformer blocks
-        self.transformer_blocks = nn.Sequential(
-            *[TransformerBlock(embd_dim, num_heads, head_sz, context_sz) for _ in range(num_transformer_blocks)],
-            nn.LayerNorm(embd_dim)
-        )
+        self.transformer_blocks = nn.Sequential(*[TransformerBlock(embd_dim, num_heads, head_sz, context_sz) for _ in range(num_transformer_blocks)], nn.LayerNorm(embd_dim))
 
         # Final language modelling head
         self.lm_head = nn.Linear(embd_dim, vocab_sz)
@@ -61,17 +44,17 @@ class Model(nn.Module):
 
     def forward(self, x):
         # x: B, T (integer encoded)
-        tok_embeddings = self.tok_embd(x.int()) # allow for uint8 inputs
+        tok_embeddings = self.tok_embd(x.int())  # allow for uint8 inputs
         pos_embeddings = self.pos_embd(x.int())
-        x = self.transformer_blocks(tok_embeddings + pos_embeddings) # (B, T, C)
-        logits = self.lm_head(x) # vocab_sz
+        x = self.transformer_blocks(tok_embeddings + pos_embeddings)  # (B, T, C)
+        logits = self.lm_head(x)  # vocab_sz
         return logits
 
     def loss(self, logits, y):
-        """ Computes loss from logits as returned by forward() with respect to
-        labels y. """
+        """Computes loss from logits as returned by forward() with respect to
+        labels y."""
         B, T, C = logits.shape
-        loss = F.cross_entropy(logits.reshape(B*T, C), y.reshape(B*T))
+        loss = F.cross_entropy(logits.reshape(B * T, C), y.reshape(B * T))
         return loss
 
     def train_epoch(self, data_loader, *, checkpoint_every=None, checkpt_dir="./models"):
@@ -79,7 +62,8 @@ class Model(nn.Module):
         Trains on data provided by a data loader.
         """
         batch_losses = []
-        def checkpoint(eval=False):
+
+        def checkpoint(run_eval=False):
             nonlocal batch_losses
             nonlocal batch_idx
             loss_mean, loss_std = np.mean(batch_losses), np.std(batch_losses)
@@ -89,11 +73,13 @@ class Model(nn.Module):
             self.save(checkpt_path)
 
             # Trigger detached full eval
-            if eval:
+            # TODO: Lockfile um zu verhindern, dass mehrere Evals parallel laufen. (lockfile sollte in cli erzeugt werden)
+            if run_eval:
                 print("Starting full eval of model checkpoint in the background ...")
-                subprocess.run(["python", "main.py", "eval", checkpt_path],
-                               start_new_session=True,
-                               check=False,
+                subprocess.run(
+                    ["python", "main.py", "eval", checkpt_path],
+                    start_new_session=True,
+                    check=False,
                 )
 
             batch_losses = []
@@ -104,11 +90,10 @@ class Model(nn.Module):
 
             if checkpoint_every is not None and batch_idx % checkpoint_every == 0:
                 checkpoint()
-        checkpoint(eval=True)
-
+        checkpoint(run_eval=True)
 
     def train_batch(self, x, y):
-        """ Performes a single training step on batch data x, y """
+        """Performes a single training step on batch data x, y"""
         self.train()
 
         # Forward pass.
@@ -126,15 +111,15 @@ class Model(nn.Module):
 
     @torch.no_grad()
     def eval_loss(self, x, y, chunk_sz=128):
-        """ Computes loss in evaluation mode. """
+        """Computes loss in evaluation mode."""
         # ???: Why do we oom if we don't chunk the data set?
         training = self.training
         self.eval()
         losses = []
         num_chunks = int(np.ceil(len(x) / chunk_sz))
         for c in range(num_chunks):
-            x_chunk = x[c*chunk_sz: (c+1)*chunk_sz]
-            y_chunk = y[c*chunk_sz: (c+1)*chunk_sz]
+            x_chunk = x[c * chunk_sz : (c + 1) * chunk_sz]
+            y_chunk = y[c * chunk_sz : (c + 1) * chunk_sz]
             logits = self.forward(x_chunk)
             loss = self.loss(logits, y_chunk)
             losses.append(loss.item())
@@ -165,11 +150,11 @@ class Model(nn.Module):
         for i in range(num_tokens):
             # Get logits for last time step
             logits = self(x)
-            logits = logits[:, -1, :] # (B, vocab_sz)
-            probs = logits.softmax(-1) # (B, vocab_sz)
-            prediction = torch.multinomial(probs, num_samples=1) # (B, 1)
-            result[:, i:i+1] = prediction
-            x = torch.cat((x, prediction), dim=-1) # (B, T+1)
+            logits = logits[:, -1, :]  # (B, vocab_sz)
+            probs = logits.softmax(-1)  # (B, vocab_sz)
+            prediction = torch.multinomial(probs, num_samples=1)  # (B, 1)
+            result[:, i : i + 1] = prediction
+            x = torch.cat((x, prediction), dim=-1)  # (B, T+1)
 
         self.train(training)
 
@@ -182,12 +167,13 @@ class Model(nn.Module):
 
         return result
 
-
     # @torch.no_grad()
     # def eval_performance(self):
 
+
 class AttentionHead(nn.Module):
-    """ Single head of masked self-attention """
+    """Single head of masked self-attention"""
+
     def __init__(self, fan_in, head_sz, context_sz):
         super().__init__()
         # Save head size in order to apply scaling later.
@@ -197,7 +183,6 @@ class AttentionHead(nn.Module):
         self.value_mat = nn.Linear(fan_in, head_sz, bias=False)
         self.register_buffer("mask", torch.tril(torch.ones((context_sz, context_sz))))
 
-
     def forward(self, x):
         _, T, _ = x.shape
 
@@ -206,17 +191,18 @@ class AttentionHead(nn.Module):
         value = self.value_mat(x)
 
         weights = query @ key.transpose(-2, -1)
-        weights = weights / self.head_sz **0.5 # scale
-        weights = weights.masked_fill(self.mask[:T, :T] == 0, float("-inf")) # mask
+        weights = weights / self.head_sz**0.5  # scale
+        weights = weights.masked_fill(self.mask[:T, :T] == 0, float("-inf"))  # mask
         weights = weights.softmax(dim=-1)
 
         # TODO: Add dropout later
 
-        return weights @ value # B, T, head_sz
+        return weights @ value  # B, T, head_sz
 
 
 class MultiHeadAttention(nn.Module):
-    """ Multi-head scaled self-attention with subsequent concatenation and linear layer """
+    """Multi-head scaled self-attention with subsequent concatenation and linear layer"""
+
     def __init__(self, in_features, num_heads, head_sz, context_sz, out_features=None):
         super().__init__()
 
@@ -235,7 +221,8 @@ class MultiHeadAttention(nn.Module):
 
 
 class FeedForward(nn.Module):
-    """ Feedfoward network following a multi-head attention block """
+    """Feedfoward network following a multi-head attention block"""
+
     def __init__(self, in_features, hidden_features=None, out_features=None):
         super().__init__()
 
@@ -244,11 +231,7 @@ class FeedForward(nn.Module):
         if out_features is None:
             out_features = in_features
 
-        self.net = nn.Sequential(
-            nn.Linear(in_features, hidden_features),
-            nn.ReLU(),
-            nn.Linear(hidden_features, out_features)
-        )
+        self.net = nn.Sequential(nn.Linear(in_features, hidden_features), nn.ReLU(), nn.Linear(hidden_features, out_features))
 
     def forward(self, x):
         out = self.net(x)
@@ -256,7 +239,8 @@ class FeedForward(nn.Module):
 
 
 class TransformerBlock(nn.Module):
-    """ Transformer Block with residual connections and layer normalization """
+    """Transformer Block with residual connections and layer normalization"""
+
     def __init__(self, in_features, num_head, head_sz, context_sz, hidden_features=None, out_features=None):
         super().__init__()
 
@@ -279,21 +263,28 @@ class TransformerBlock(nn.Module):
 
 
 class TransformerPlayer(SANPlayer):
+    board: chess.Board
     model: Model
     model_context_sz: int
     model_device: str
     movetensor: torch.Tensor
     write_idx: int
-    context_exceeded: bool
+    context_overflow: bool
+    num_tries_until_valid: int
 
-    def __init__(self, model: Model, movelist = ()):
+    def __init__(
+        self,
+        model: Model,
+        movelist=TANMoveList(()),
+        num_tries_until_valid=1,
+    ):
         self.model = model
         self.model_context_sz = self.model.init_params["context_sz"]
         self.model_device = "cuda" if next(model.parameters()).is_cuda else "cpu"
-        self.reset(movelist)
+        self.reset(movelist, num_tries_until_valid)
 
-    def push_moves(self, movelist: Collection[str]):
-        if self.context_exceeded:
+    def push_moves(self, movelist: TANMoveList):
+        if self.context_overflow:
             return
 
         for m in movelist:
@@ -303,23 +294,21 @@ class TransformerPlayer(SANPlayer):
             # Silently stop adding moves once we've reached the end of the
             # tensor. Resignation will follow.
             if self.write_idx + num_tokens >= len(self.movetensor):
-                self.context_exceeded = True
+                self.context_overflow = True
                 return
 
-            self.movetensor[self.write_idx:self.write_idx+num_tokens] = torch.from_numpy(encd)
+            self.movetensor[self.write_idx : self.write_idx + num_tokens] = torch.from_numpy(encd)
             self.write_idx += num_tokens
+            self.board.push_san(m)
 
-    def suggest_moves(self, n: int = 1) -> Tuple[None | san_chess.PlayerSignal, Sequence[str]]:
-        if self.context_exceeded:
-            return san_chess.PlayerSignal.CONTEXT_OVERFLOW, []
+    def suggest_move(self) -> Literal[PlayerSignal.CONTEXT_OVERFLOW, PlayerSignal.CANT_CONSTRUCT_MOVE] | TANMove:
+        if self.context_overflow:
+            return san_chess.PlayerSignal.CONTEXT_OVERFLOW
 
-        moves = []
-        for _ in range(n):
-            # TODO: Parallelize generation of moves.
+        for _ in range(self.num_tries_until_valid):
             movetensor_buffer = self.movetensor.clone()
             write_idx_buffer = self.write_idx
 
-            # TODO: return out of context signal
             while True:
                 token = self.model.generate(movetensor_buffer[:write_idx_buffer], num_tokens=1).item()
 
@@ -329,14 +318,21 @@ class TransformerPlayer(SANPlayer):
                 if num_generated_tokens >= san_chess.TAN_MAX_MOVE_LEN:
                     break
 
-                # Brute force over padding tokens.
-                if token == padding_idx:
+                # Skip over padding tokens.
+                # TODO: Padding tokens erscheinen in den Daten nach dem letzten
+                #       Zug eines Spiels, sind also Teil eines sinnvollen Outputs.
+                #       Vielleicht sollte ich padding tokens und whitespaces gleich
+                #       behandeln.
+                #       Alternativvorschlag: Spiele werden direkt mit einem extra Leerzeichen
+                #                            am Ende der Zugsequenz kodiert, sodass Paddingtokens
+                #                            niemals nach einem Zug erscheinen.
+                if token == PADDING_IDX:
                     continue
 
                 # Break if whitespace is returned. Whitespace is not part of
                 # the returned move. However, continue if no tokens have been
                 # generated yet.
-                if token == whitespace_idx:
+                if token == WHITESPACE_IDX:
                     if num_generated_tokens == 0:
                         continue
                     break
@@ -345,29 +341,36 @@ class TransformerPlayer(SANPlayer):
                 write_idx_buffer += 1
 
             # Decode generated move.
-            move = decode_moveline_tensor(movetensor_buffer[self.write_idx:write_idx_buffer])
-            moves.append(move)
+            move = decode_moveline_tensor(movetensor_buffer[self.write_idx : write_idx_buffer])
+            if san_chess.is_valid(move, self.board):
+                return TANMove(SANMove(move))
 
-        return None, moves
+        return PlayerSignal.CANT_CONSTRUCT_MOVE
 
-
-    def reset(self, movelist: Collection[str] = ()):
+    def reset(
+        self,
+        movelist: TANMoveList = TANMoveList(()),
+        num_tries_until_valid=1,
+    ):
+        self.board = chess.Board()
         self.movetensor = torch.zeros(
             (self.model_context_sz,),
             dtype=torch.uint8,
             device=self.model_device,
             requires_grad=False,
         )
-        self.write_idx = 1 # write pointer; 0 is reserved for padding
-        self.context_exceeded = False
+        self.write_idx = 1  # write pointer; 0 is reserved for padding
+        self.context_overflow = False
+        self.num_tries_until_valid = num_tries_until_valid
 
         self.push_moves(movelist)
 
 
-encode_moveline_dict = { c:np.uint8(i) for i,c in enumerate(san_chess.TAN_MOVELINE_CHARS, 1) }
-decode_moveline_dict = { i:c for c,i in encode_moveline_dict.items() }
-whitespace_idx = encode_moveline_dict[" "]
-padding_idx = 0
+encode_moveline_dict = {c: np.uint8(i) for i, c in enumerate(san_chess.TAN_MOVELINE_CHARS, 1)}
+decode_moveline_dict = {i: c for c, i in encode_moveline_dict.items()}
+WHITESPACE_IDX = encode_moveline_dict[" "]
+PADDING_IDX = 0
+
 
 def encode_moveline_as_np8(tan_moveline: str) -> np.ndarray:
     result = np.empty(len(tan_moveline), dtype=np.uint8)
@@ -375,18 +378,21 @@ def encode_moveline_as_np8(tan_moveline: str) -> np.ndarray:
         result[i] = encode_moveline_dict[c]
     return result
 
+
 def decode_moveline_tensor(tan_tokens: torch.Tensor) -> str:
     # TODO: Convert
     return "".join([decode_moveline_dict[np.uint8(t)] for t in tan_tokens.cpu()])
 
+
 def decode_moveline(tan_tokens: Sequence[int]) -> str:
     return "".join([decode_moveline_dict[np.uint8(t)] for t in tan_tokens])
 
+
 class Dump(Dataset):
     def __init__(self, tan_file: str, context_size: int, *, device=None, max_size=sys.maxsize, dtype=torch.uint8):
-        width = context_size + 1 # tensor width
+        width = context_size + 1  # tensor width
         max_lines = math.floor(max_size / torch_elem_size(dtype) / width)
-        height = count_lines_in_file(tan_file, max_lines=max_lines) # tensor height
+        height = count_lines_in_file(tan_file, max_lines=max_lines)  # tensor height
         self.data = torch.zeros((height, width), dtype=dtype)
         with open(tan_file, "r") as f:
             for i, gameline in enumerate(f):
@@ -396,7 +402,7 @@ class Dump(Dataset):
                 moveline = san_chess.tan_moveline_from_gameline(gameline)
                 n = min(len(moveline), context_size)
                 encd = encode_moveline_as_np8(moveline[:n])
-                self.data[i, 1:n+1] = torch.from_numpy(encd)
+                self.data[i, 1 : n + 1] = torch.from_numpy(encd)
 
         if device is not None:
             self.data = self.data.to(device)
@@ -409,4 +415,3 @@ class Dump(Dataset):
 
     def mem_size(self):
         return self.data.nelement() * self.data.element_size()
-
