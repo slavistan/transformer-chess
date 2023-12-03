@@ -219,6 +219,8 @@ class SANPlayer(Protocol):
 
     # Parameters with which player was initialized. Used to annotate
     # evaluations and performance measurements.
+    # TODO: info() Methode:
+    #       - name (testen, dass Namen eindeutig sind)
     info = {}
 
     @abstractmethod
