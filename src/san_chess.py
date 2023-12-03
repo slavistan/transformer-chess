@@ -199,6 +199,7 @@ class Game(TypedDict):
 @enum.unique
 class PlayerSignal(enum.Enum):
     """Signal communicated by players in addition to their moves."""
+    # TODO: Signale auf Seite der Player definieren, aber hier auflisten
 
     ABANDONED_GAME = enum.auto()
     """GUIPlayer: Closed window."""
@@ -236,6 +237,9 @@ class SANPlayer(Protocol):
     def suggest_moves(self, n: int = 1) -> Tuple[PlayerSignal | None, Sequence[str]]:
         """
         Suggests moves in SAN format. Must not modify move stack.
+
+        # TODO: Festlegen, wie n interpretiert werden soll.
+        #       - Maximale Anzahl? Minimale? Müssen Züge unterschiedlich sein?
         """
 
     @abstractmethod
@@ -311,7 +315,6 @@ class PresetPlayer(SANPlayer):
 
     moves: List[str]
     move_idx: int
-    info: dict
 
     def __init__(
         self,

@@ -11,3 +11,4 @@
 
 # TODO: Abdeckung legaler Züge des Transformers evaluieren
 #       - Alle legalen Züge ausgeben und via "Beamsearch" vergleichen
+# TODO: SANPlayer.suggest_moves() könnte Züge mit Konfidenz zurückgeben `(sig, {"a4", 0.3, "Qxf1": 0.7})`
