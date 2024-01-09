@@ -1,9 +1,11 @@
 from __future__ import annotations
+
+from enum import StrEnum
 import sys
 import subprocess
 from datetime import datetime
 import math
-from typing import Sequence, Literal
+from typing import Sequence
 
 import numpy as np
 import torch
@@ -12,9 +14,16 @@ from torch import nn
 from torch.nn import functional as F
 import chess
 
-from src import san_chess
 from src.tools import count_lines_in_file, torch_elem_size
-from src.san_chess import PlayerSignal, SANPlayer, TANMoveList, TANMove, SANMove
+from src.tan_chess import (
+    TANMoveList,
+    TANMove,
+    TANPlayer,
+    TAN_MOVELINE_CHARS,
+    TAN_MAX_MOVE_LEN,
+    is_valid,
+    tan_moveline_from_gameline,
+)
 
 
 class Model(nn.Module):
@@ -73,11 +82,10 @@ class Model(nn.Module):
             self.save(checkpt_path)
 
             # Trigger detached full eval
-            # TODO: Lockfile um zu verhindern, dass mehrere Evals parallel laufen. (lockfile sollte in cli erzeugt werden)
             if run_eval:
                 print("Starting full eval of model checkpoint in the background ...")
                 subprocess.run(
-                    ["python", "main.py", "eval", checkpt_path],
+                    ["python", "main.py", "eval-perf", checkpt_path],
                     start_new_session=True,
                     check=False,
                 )
@@ -262,7 +270,7 @@ class TransformerBlock(nn.Module):
         return x
 
 
-class TransformerPlayer(SANPlayer):
+class TransformerPlayer(TANPlayer):
     board: chess.Board
     model: Model
     model_context_sz: int
@@ -275,7 +283,7 @@ class TransformerPlayer(SANPlayer):
     def __init__(
         self,
         model: Model,
-        movelist=TANMoveList(()),
+        movelist=(),
         num_tries_until_valid=1,
     ):
         self.model = model
@@ -283,9 +291,12 @@ class TransformerPlayer(SANPlayer):
         self.model_device = "cuda" if next(model.parameters()).is_cuda else "cpu"
         self.reset(movelist, num_tries_until_valid)
 
-    def push_moves(self, movelist: TANMoveList):
+    def push_moves(
+        self,
+        movelist: TANMoveList,
+    ) -> TransformerPlayer:
         if self.context_overflow:
-            return
+            return self
 
         for m in movelist:
             encd = encode_moveline_as_np8(m + " ")
@@ -295,15 +306,19 @@ class TransformerPlayer(SANPlayer):
             # tensor. Resignation will follow.
             if self.write_idx + num_tokens >= len(self.movetensor):
                 self.context_overflow = True
-                return
+                return self
 
             self.movetensor[self.write_idx : self.write_idx + num_tokens] = torch.from_numpy(encd)
             self.write_idx += num_tokens
             self.board.push_san(m)
 
-    def suggest_move(self) -> Literal[PlayerSignal.CONTEXT_OVERFLOW, PlayerSignal.CANT_CONSTRUCT_MOVE] | TANMove:
+        return self
+
+    def suggest_move(
+        self,
+    ) -> TransformerPlayer.Signals | TANMove:
         if self.context_overflow:
-            return san_chess.PlayerSignal.CONTEXT_OVERFLOW
+            return TransformerPlayer.Signals.CONTEXT_OVERFLOW
 
         for _ in range(self.num_tries_until_valid):
             movetensor_buffer = self.movetensor.clone()
@@ -313,9 +328,9 @@ class TransformerPlayer(SANPlayer):
                 token = self.model.generate(movetensor_buffer[:write_idx_buffer], num_tokens=1).item()
 
                 # Abort once we exceed the maximum number of characters a move
-                # can consist of.
+                # in TAN format can consist of.
                 num_generated_tokens = write_idx_buffer - self.write_idx
-                if num_generated_tokens >= san_chess.TAN_MAX_MOVE_LEN:
+                if num_generated_tokens >= TAN_MAX_MOVE_LEN:
                     break
 
                 # Skip over padding tokens.
@@ -342,16 +357,16 @@ class TransformerPlayer(SANPlayer):
 
             # Decode generated move.
             move = decode_moveline_tensor(movetensor_buffer[self.write_idx : write_idx_buffer])
-            if san_chess.is_valid(move, self.board):
-                return TANMove(SANMove(move))
+            if is_valid(move, self.board):
+                return move
 
-        return PlayerSignal.CANT_CONSTRUCT_MOVE
+        return TransformerPlayer.Signals.CANT_CONSTRUCT_VALID_MOVE
 
     def reset(
         self,
-        movelist: TANMoveList = TANMoveList(()),
+        movelist: TANMoveList = (),
         num_tries_until_valid=1,
-    ):
+    ) -> TransformerPlayer:
         self.board = chess.Board()
         self.movetensor = torch.zeros(
             (self.model_context_sz,),
@@ -365,8 +380,14 @@ class TransformerPlayer(SANPlayer):
 
         self.push_moves(movelist)
 
+        return self
 
-encode_moveline_dict = {c: np.uint8(i) for i, c in enumerate(san_chess.TAN_MOVELINE_CHARS, 1)}
+    class Signals(StrEnum):
+        CONTEXT_OVERFLOW = "context size exceeded"
+        CANT_CONSTRUCT_VALID_MOVE = "could not construct a valid move within the given number of attempts"
+
+
+encode_moveline_dict = {c: np.uint8(i) for i, c in enumerate(TAN_MOVELINE_CHARS, 1)}
 decode_moveline_dict = {i: c for c, i in encode_moveline_dict.items()}
 WHITESPACE_IDX = encode_moveline_dict[" "]
 PADDING_IDX = 0
@@ -399,7 +420,7 @@ class Dump(Dataset):
                 if i >= max_lines:
                     break
 
-                moveline = san_chess.tan_moveline_from_gameline(gameline)
+                moveline = tan_moveline_from_gameline(gameline)
                 n = min(len(moveline), context_size)
                 encd = encode_moveline_as_np8(moveline[:n])
                 self.data[i, 1 : n + 1] = torch.from_numpy(encd)

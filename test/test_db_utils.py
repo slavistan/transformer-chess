@@ -1,6 +1,6 @@
 """Tests for db_utils.py"""
 
-from src import db_utils, san_chess
+from src import db_utils, tan_chess
 import multiprocessing as mp
 import os
 from pathlib import Path
@@ -83,7 +83,7 @@ def test_parallel_process(tmp_path: Path):
     for num_workers in [1, 4, mp.cpu_count()]:
         split_fn = db_utils.splitfn_lines_sequential
         process_fn = db_utils.processfn_filter_by_outcome
-        process_fn_extra_args = (san_chess.Outcome.CHECKMATE | ~san_chess.Outcome.CHECKMATE,)
+        process_fn_extra_args = (tan_chess.Outcome.CHECKMATE | ~tan_chess.Outcome.CHECKMATE,)
         collect_fn = db_utils.make_writefn(str(out_path))
         db_utils.parallel_process(
             "./data/example.tan",

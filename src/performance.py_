@@ -1,4 +1,4 @@
-from typing import Tuple, Callable, TypedDict, Iterable, LiteralString, cast, Any, Set
+from typing import Tuple, Callable, List, Literal, TypedDict, Iterable, LiteralString, cast, Any, Set
 from copy import deepcopy
 from collections import defaultdict
 from dataclasses import dataclass
@@ -12,7 +12,6 @@ import time
 import pandas as pd
 import chess
 import os
-from src.san_chess import SANPlayer, SANMoveList, SANMove, RandomPlayer, Game, play_game, Literal, List, PlayerSignal, strip, is_valid
 from src.db_utils import tan_gameline_to_moveline, san_move_to_tan
 from src import vanilla_transformer
 from plotnine import *
@@ -144,7 +143,6 @@ def full_eval(
     *,
     num_random=16,
     num_self=16,
-    num_tries=8,  # number of attempts to generate a valid move (transformer players)
     num_puzzle_attempts=64,  # number of times a puzzle is tried (stochastic players)
     num_workers=1,
 ) -> EvalResult:
@@ -163,7 +161,6 @@ def full_eval(
         result[k] = vs_random(
             player,
             num_games=num_random,
-            num_retries=num_tries - 1,
             play_as=side,
             num_workers=num_workers,
         )
@@ -199,8 +196,6 @@ def vs_random(
     num_games: int,
     *,
     play_as: Literal["white", "black"] = "white",
-    num_retries: int = 0,
-    retry_strategy: Literal["eager", "lazy"] = "lazy",
     num_workers: int = 1,
 ) -> List[Game]:
     """
@@ -217,7 +212,7 @@ def vs_random(
             num_games_per_worker,
         ]
     ]
-    worker_kwargs = num_workers * [{"play_as": play_as, "num_retries": num_retries, "retry_strategy": retry_strategy}]
+    worker_kwargs = num_workers * [{"play_as": play_as}]
     for i in range(num_games - num_games_per_worker * num_workers):
         worker_pargs[i][1] += 1
 
@@ -351,7 +346,7 @@ def full_eval_transformer(
     num_puzzles=256,
     num_puzzle_attempts=64,
     num_workers=1,
-    num_tries=8,
+    num_tries_until_valid=16,
 ):
     # TODO: machine-independent way of storing puzzles
     puzzles = list(
@@ -362,14 +357,13 @@ def full_eval_transformer(
     )
 
     m = vanilla_transformer.Model.load(pth_file).to("cpu")
-    player = vanilla_transformer.TransformerPlayer(m)
+    player = vanilla_transformer.TransformerPlayer(m, num_tries_until_valid=num_tries_until_valid)
     eval_results = full_eval(
         player,
         puzzles,
         num_random=num_random,
         num_self=num_self,
         num_puzzle_attempts=num_puzzle_attempts,
-        num_tries=num_tries,
         num_workers=num_workers,
     )
 
