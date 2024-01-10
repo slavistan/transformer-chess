@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import io
-from enum import StrEnum
+from enum import Enum, auto
 import tkinter as tk
 import random
 
@@ -38,17 +38,23 @@ class PresetPlayer(TANPlayer):
         self,
         movelist: TANMoveList,
     ) -> PresetPlayer:
-        if self.movelist[self.move_idx : self.move_idx + len(movelist)] != movelist:
-            self.diverged_from_preset = True
-        else:
-            self.move_idx += len(movelist)
+        for m in movelist:
+            if self.move_idx >= len(self.movelist):
+                return self
+            if self.movelist[self.move_idx] != m:
+                self.diverged_from_preset = True
+                return self
+            self.move_idx += 1
         return self
 
     def suggest_move(
         self,
     ) -> PresetPlayer.ResignationReason | TANMove:
-        if self.diverged_from_preset or self.move_idx >= len(self.movelist):
+        if self.diverged_from_preset:
             return PresetPlayer.ResignationReason.DIVERGED_FROM_PRESET
+        if self.move_idx >= len(self.movelist):
+            return PresetPlayer.ResignationReason.EXCEEDED_PRESET
+
         return self.movelist[self.move_idx]
 
     def reset(self, movelist: TANMoveList = ()) -> PresetPlayer:
@@ -57,8 +63,12 @@ class PresetPlayer(TANPlayer):
         self.diverged_from_preset = False
         return self
 
-    class ResignationReason(StrEnum):
-        DIVERGED_FROM_PRESET = "diverged from preset"
+    class ResignationReason(Enum):
+        DIVERGED_FROM_PRESET = auto()
+        """Diverged from preset list of moves by pushing a mismatching move"""
+
+        EXCEEDED_PRESET = auto()
+        """Exceeded preset movelist"""
 
 
 class RandomPlayer(TANPlayer):
@@ -84,10 +94,10 @@ class RandomPlayer(TANPlayer):
 
     def suggest_move(
         self,
-    ) -> RandomPlayer.Signals | TANMove:
+    ) -> RandomPlayer.ResignationReason | TANMove:
         legal_moves = list(self.board.legal_moves)
         if len(legal_moves) == 0:
-            return RandomPlayer.Signals.NO_LEGAL_MOVES
+            return RandomPlayer.ResignationReason.NO_LEGAL_MOVES
 
         move_uci = self.rng.choice(legal_moves)
         move_san = uci_to_tan(move_uci, self.board)
@@ -99,8 +109,9 @@ class RandomPlayer(TANPlayer):
         self.board = chess.Board()
         return self
 
-    class Signals(StrEnum):
-        NO_LEGAL_MOVES = "no legal moves to choose from"
+    class ResignationReason(Enum):
+        NO_LEGAL_MOVES = auto()
+        """No legal moves to pick from"""
 
 
 class GUIPlayer(TANPlayer):
@@ -205,5 +216,6 @@ class GUIPlayer(TANPlayer):
 
         self.draw_board(fill=fill)
 
-    class ResignationReason(StrEnum):
-        ABANDONED_GAME = "abandoned game"
+    class ResignationReason(Enum):
+        ABANDONED_GAME = auto()
+        """GUI Player abandoned game before it finished, e.g. by closing the window"""

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from enum import StrEnum
+from enum import Enum, auto
 import sys
 import subprocess
 from datetime import datetime
@@ -316,9 +316,9 @@ class TransformerPlayer(TANPlayer):
 
     def suggest_move(
         self,
-    ) -> TransformerPlayer.Signals | TANMove:
+    ) -> TransformerPlayer.ResignationReason | TANMove:
         if self.context_overflow:
-            return TransformerPlayer.Signals.CONTEXT_OVERFLOW
+            return TransformerPlayer.ResignationReason.CONTEXT_OVERFLOW
 
         for _ in range(self.num_tries_until_valid):
             movetensor_buffer = self.movetensor.clone()
@@ -360,7 +360,7 @@ class TransformerPlayer(TANPlayer):
             if is_valid(move, self.board):
                 return move
 
-        return TransformerPlayer.Signals.CANT_CONSTRUCT_VALID_MOVE
+        return TransformerPlayer.ResignationReason.CANT_CONSTRUCT_VALID_MOVE
 
     def reset(
         self,
@@ -382,9 +382,12 @@ class TransformerPlayer(TANPlayer):
 
         return self
 
-    class Signals(StrEnum):
-        CONTEXT_OVERFLOW = "context size exceeded"
-        CANT_CONSTRUCT_VALID_MOVE = "could not construct a valid move within the given number of attempts"
+    class ResignationReason(Enum):
+        CONTEXT_OVERFLOW = auto()
+        """Preset context size of transformer exceeded by game tokens"""
+
+        CANT_CONSTRUCT_VALID_MOVE = auto()
+        """Failed to produce a valid move after a set amount of attempts"""
 
 
 encode_moveline_dict = {c: np.uint8(i) for i, c in enumerate(TAN_MOVELINE_CHARS, 1)}

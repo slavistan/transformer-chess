@@ -1,8 +1,9 @@
 import pytest
 
-from src.tan_chess import PlayerSignal, PresetPlayer, TANMoveList
+from src.tan_chess import PresetPlayer, TANMoveList
 
 from ..assets.games import conclusive_games
+
 
 class Test_PresetPlayer:
     assert PresetPlayer.__name__ == "PresetPlayer"
@@ -23,9 +24,9 @@ class Test_PresetPlayer:
         for _ in range(8):
             p.push_moves(["a4"])
             sig = p.suggest_move()
-            assert sig == PlayerSignal.DIVERGED_FROM_PRESET
+            assert sig == PresetPlayer.ResignationReason.DIVERGED_FROM_PRESET
 
-    def test_divert_from_preset_at_end_of_game(self):
+    def test_exceed_preset(self):
         movelist = ["e4", "d5", "a4"]
         p = PresetPlayer(movelist)
 
@@ -34,4 +35,4 @@ class Test_PresetPlayer:
 
         # Sends out of moves signal once the movelist is exceeded.
         sig = p.suggest_move()
-        assert sig == PlayerSignal.DIVERGED_FROM_PRESET
+        assert sig == PresetPlayer.ResignationReason.EXCEEDED_PRESET

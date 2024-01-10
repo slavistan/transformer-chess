@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from typing import TypedDict
+
 from enum import Flag, unique, auto
 
 import chess
@@ -36,35 +37,55 @@ class Outcome(Flag):
     DRAW_INSUFFICIENT_MATERIAL = auto()
     DRAW_SEVENTYFIVE_MOVES = auto()
     DRAW_FIVEFOLD_REPETITION = auto()
-    DRAW_FIFTY_MOVES = auto()
-    DRAW_THREEFOLD_REPETITION = auto()
 
     ABORT_INVALID_OPENING = auto()
     """Game abort due to providing an invalid sequence of opening moves."""
 
-    # CONTINUEHERE: Allen Code parsen und RESIGNATION Enums hier hinzufügen
-    #               - Contract test schreiben der prüft, ob alle Kindsklassen von TANChess Resignation Signale korrekt implementieren
-    WHITE_WINS_RESIGNATION = auto()
-    BLACK_WINS_RESIGNATION = auto()
+    INCOMPLETE_GAME = auto()
+    """Game didn't end conclusively"""
+
+    # The following entries represent outcomes produced by the player specific
+    # resignation reasons. Correspondence between the player classes'
+    # resignation reason enums and the entries below is asserted by tests.
+    WHITE_WINS_RESIGNATION_PRESETPLAYER_DIVERGED_FROM_PRESET = auto()
+    WHITE_WINS_RESIGNATION_PRESETPLAYER_EXCEEDED_PRESET = auto()
+    WHITE_WINS_RESIGNATION_RANDOMPLAYER_NO_LEGAL_MOVES = auto()
+    WHITE_WINS_RESIGNATION_GUIPLAYER_ABANDONED_GAME = auto()
+    WHITE_WINS_RESIGNATION_TRANSFORMERPLAYER_CONTEXT_OVERFLOW = auto()
+    WHITE_WINS_RESIGNATION_TRANSFORMERPLAYER_CANT_CONSTRUCT_VALID_MOVE = auto()
+    BLACK_WINS_RESIGNATION_PRESETPLAYER_DIVERGED_FROM_PRESET = auto()
+    BLACK_WINS_RESIGNATION_PRESETPLAYER_EXCEEDED_PRESET = auto()
+    BLACK_WINS_RESIGNATION_RANDOMPLAYER_NO_LEGAL_MOVES = auto()
+    BLACK_WINS_RESIGNATION_GUIPLAYER_ABANDONED_GAME = auto()
+    BLACK_WINS_RESIGNATION_TRANSFORMERPLAYER_CONTEXT_OVERFLOW = auto()
+    BLACK_WINS_RESIGNATION_TRANSFORMERPLAYER_CANT_CONSTRUCT_VALID_MOVE = auto()
 
     # Aliases to define comfy helpers.
-    # TODO: Any von Hand implementieren, mit Test festzurren, dass alle canonicals enthalten sind.
-    # ANY = ...
-
-    WHITE_WINS = WHITE_WINS_CHECKMATE | WHITE_WINS_DQ_INVALID_MOVE
+    # fmt: off
+    WHITE_WINS = WHITE_WINS_CHECKMATE | \
+        WHITE_WINS_DQ_INVALID_MOVE | \
+        WHITE_WINS_RESIGNATION_PRESETPLAYER_DIVERGED_FROM_PRESET  | \
+        WHITE_WINS_RESIGNATION_RANDOMPLAYER_NO_LEGAL_MOVES  | \
+        WHITE_WINS_RESIGNATION_GUIPLAYER_ABANDONED_GAME  | \
+        WHITE_WINS_RESIGNATION_TRANSFORMERPLAYER_CONTEXT_OVERFLOW  | \
+        WHITE_WINS_RESIGNATION_TRANSFORMERPLAYER_CANT_CONSTRUCT_VALID_MOVE
     """White won the game."""
 
-    BLACK_WINS = BLACK_WINS_CHECKMATE | BLACK_WINS_DQ_INVALID_MOVE
+    BLACK_WINS = BLACK_WINS_CHECKMATE | \
+        BLACK_WINS_DQ_INVALID_MOVE | \
+        BLACK_WINS_RESIGNATION_PRESETPLAYER_DIVERGED_FROM_PRESET  | \
+        BLACK_WINS_RESIGNATION_RANDOMPLAYER_NO_LEGAL_MOVES  | \
+        BLACK_WINS_RESIGNATION_GUIPLAYER_ABANDONED_GAME  | \
+        BLACK_WINS_RESIGNATION_TRANSFORMERPLAYER_CONTEXT_OVERFLOW  | \
+        BLACK_WINS_RESIGNATION_TRANSFORMERPLAYER_CANT_CONSTRUCT_VALID_MOVE
     """Black won the game."""
+    # fmt: on
 
     CHECKMATE = WHITE_WINS_CHECKMATE | BLACK_WINS_CHECKMATE
     """Game ended in a checkmate."""
 
     DRAW_CONCLUSIVE = DRAW_STALEMATE | DRAW_INSUFFICIENT_MATERIAL | DRAW_SEVENTYFIVE_MOVES | DRAW_FIVEFOLD_REPETITION
     """Game ended in a draw, forced by the rules of the game."""
-
-    DRAW_CLAIMED = DRAW_FIFTY_MOVES | DRAW_THREEFOLD_REPETITION
-    """Game ended in a draw, claimed by one of the players."""
 
     DQ_INVALID_MOVE = WHITE_WINS_DQ_INVALID_MOVE | BLACK_WINS_DQ_INVALID_MOVE
     """Game ended due to disqualification, for example due to repeatedly
@@ -73,12 +94,18 @@ class Outcome(Flag):
     CONCLUSIVE = CHECKMATE | DRAW_CONCLUSIVE
 
     @staticmethod
-    def from_pychess_outcome(outcome: chess.Outcome) -> Outcome:
+    def from_python_chess_outcome(outcome: chess.Outcome) -> Outcome:
         """Returns a canonical Outcome from a chess.Outcome."""
 
+        python_chess_draws_to_outcome = {
+            chess.Termination.SEVENTYFIVE_MOVES: Outcome.DRAW_SEVENTYFIVE_MOVES,
+            chess.Termination.FIVEFOLD_REPETITION: Outcome.DRAW_FIVEFOLD_REPETITION,
+            chess.Termination.INSUFFICIENT_MATERIAL: Outcome.DRAW_INSUFFICIENT_MATERIAL,
+            chess.Termination.STALEMATE: Outcome.DRAW_STALEMATE,
+        }
         if outcome.winner is not None:
             return Outcome.WHITE_WINS_CHECKMATE if outcome.winner else Outcome.BLACK_WINS_CHECKMATE
-        return _termination_to_outcome[outcome.termination]
+        return python_chess_draws_to_outcome[outcome.termination]
 
     @staticmethod
     def from_union_string(union_str: str) -> Outcome:
@@ -150,16 +177,17 @@ def play_game(
             return {
                 "moves": moves,
                 "num_opening_moves": len(opening),
-                "outcome": Outcome.from_pychess_outcome(outcome),
+                "outcome": Outcome.from_python_chess_outcome(outcome),
             }
 
-        # Get a move suggestion, validate and push it.
         players_idx = board.turn & (len(players) - 1)  # picks the correct player index
         response = players[players_idx].suggest_move()
         if isinstance(response, TANMove):
+            # Player returned a move.
             move = response
             if not is_valid(move, board):
-                outcome = Outcome.BLACK_WINS_DQ_INVALID_MOVE if board.turn else Outcome.WHITE_WINS_DQ_INVALID_MOVE
+                outcome_name = f"{'WHITE' if not board.turn else 'BLACK'}_WINS_DQ_INVALID_MOVE"
+                outcome = Outcome[outcome_name]
                 return {
                     "moves": moves,
                     "num_opening_moves": len(opening),
@@ -171,9 +199,10 @@ def play_game(
                 p.push_moves([move])
             board.push_san(move)
         else:
-            # Handle signals.
-            signal = response  # TODO:
-            outcome = Outcome.WHITE_WINS_RESIGNATION if not board.turn else Outcome.BLACK_WINS_RESIGNATION
+            # Player resigned.
+            resignation_reason = response
+            outcome_name = f"{'WHITE' if not board.turn else 'BLACK'}_WINS_RESIGNATION_{players[players_idx].__class__.__name__.upper()}_{resignation_reason.name}"
+            outcome = Outcome[outcome_name]
             return {
                 "moves": moves,
                 "num_opening_moves": len(opening),
@@ -181,16 +210,27 @@ def play_game(
             }
 
 
-def get_outcome(movelist: TANMoveList) -> Outcome:
-    """Returns a game's outcome by playing it out by a PresetPlayer.
-    Inconclusive games will result in a resignation signal."""
+def get_outcome(
+    movelist: TANMoveList,
+) -> Outcome:
+    """
+    Returns a game's outcome by playing it out by a PresetPlayer.
+    Inconclusive games will result in a resignation signal.
+    """
+
     # TODO: Was, wenn Spiel nicht terminiert? play_game kann hier so nicht verwendet werden.
     # TODO: Was, wenn die Züge ungültig sind?
     game = play_game(PresetPlayer(movelist), opening=movelist)
+    # We detect inconclusive games by waiting for the preset player for resign
+    # due to exceeding the preset move list.
+    if game["outcome"] in (Outcome.WHITE_WINS_RESIGNATION_PRESETPLAYER_EXCEEDED_PRESET, Outcome.BLACK_WINS_RESIGNATION_PRESETPLAYER_EXCEEDED_PRESET):
+        return Outcome.INCOMPLETE_GAME
     return game["outcome"]
 
 
-def tan_moveline_from_gameline(tan_gameline: str) -> str:
+def tan_moveline_from_gameline(
+    tan_gameline: str,
+) -> str:
     tan_gameline = tan_gameline.rstrip()
     if tan_gameline.endswith(TAN_EOG_CHARS):
         return tan_gameline[:-2]  # strip eog char and trailing whitespace
@@ -219,48 +259,3 @@ def is_valid(
     except ValueError:
         return False
     return True
-
-    # @staticmethod
-    # def from_player_signal(
-    #     signal: PlayerSignal,
-    #     turn: chess.Color,
-    # ) -> Outcome:
-    #     """
-    #     Converts a player signal into the corresponding game outcome.
-    #     """
-
-    #     if signal == PlayerSignal.DIVERGED_FROM_PRESET:
-    #         if turn == chess.WHITE:
-    #             return Outcome.BLACK_WINS_RESIGNATION_DIVERGED_FROM_PRESET
-    #         return Outcome.WHITE_WINS_RESIGNATION_DIVERGED_FROM_PRESET
-
-    #     if signal == PlayerSignal.CONTEXT_OVERFLOW:
-    #         if turn == chess.WHITE:
-    #             return Outcome.BLACK_WINS_RESIGNATION_CONTEXT_OVERFLOW
-    #         return Outcome.WHITE_WINS_RESIGNATION_CONTEXT_OVERFLOW
-
-    #     if signal == PlayerSignal.ABANDONED_GAME:
-    #         if turn == chess.WHITE:
-    #             return Outcome.BLACK_WINS_RESIGNATION_ABANDONED_GAME
-    #         return Outcome.WHITE_WINS_RESIGNATION_ABANDONED_GAME
-
-    #     if signal == PlayerSignal.CANT_CONSTRUCT_MOVE:
-    #         if turn == chess.WHITE:
-    #             return Outcome.BLACK_WINS_RESIGNATION_CANT_CONSTRUCT_MOVE
-    #         return Outcome.WHITE_WINS_RESIGNATION_CANT_CONSTRUCT_MOVE
-
-    #     # TODO: "no legal moves" sollte nicht zum Sieg des anderen führen.
-    #     if signal == PlayerSignal.NO_LEGAL_MOVES:
-    #         if turn == chess.WHITE:
-    #             return Outcome.BLACK_WINS_RESIGNATION_NO_LEGAL_MOVES
-    #         return Outcome.WHITE_WINS_RESIGNATION_NO_LEGAL_MOVES
-
-    #     raise NotImplementedError(f"Unknown signal: {signal}")
-
-
-_termination_to_outcome = {
-    chess.Termination.SEVENTYFIVE_MOVES: Outcome.DRAW_SEVENTYFIVE_MOVES,
-    chess.Termination.FIVEFOLD_REPETITION: Outcome.DRAW_FIVEFOLD_REPETITION,
-    chess.Termination.INSUFFICIENT_MATERIAL: Outcome.DRAW_INSUFFICIENT_MATERIAL,
-    chess.Termination.STALEMATE: Outcome.DRAW_STALEMATE,
-}

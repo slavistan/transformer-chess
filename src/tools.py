@@ -1,9 +1,11 @@
-import inspect
-from typing import Callable, Type, Any, Union, IO
+import importlib
+import pkgutil
+from typing import Union, IO
 import mmap
 import os
 import sys
 import contextlib
+
 import torch
 
 
@@ -98,3 +100,16 @@ class RoUnalignedMMAP:
     @property
     def closed(self):
         return self.mm.closed
+
+
+def import_all_modules(package_name: str):
+    """
+    Recusively imports all modules from a root package.
+    """
+
+    package = importlib.import_module(package_name)
+    for _, module_name, is_pkg in pkgutil.walk_packages(package.__path__):
+        full_module_name = f"{package_name}.{module_name}"
+        importlib.import_module(full_module_name)
+        if is_pkg:
+            import_all_modules(full_module_name)

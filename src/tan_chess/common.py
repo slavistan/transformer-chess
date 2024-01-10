@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from enum import StrEnum
+from enum import Enum
 from typing import Sequence
 
 import chess
@@ -54,7 +54,7 @@ class TANPlayer(ABC):
     # TODO: info() Methode:
     #       - name (testen, dass Namen eindeutig sind)
 
-    class ResignationReason(StrEnum):
+    class ResignationReason(Enum):
         """
         Resignation signals of player. Subclasses must override this if they
         can resign.

@@ -10,7 +10,7 @@ import logging
 from torch import cuda
 import clize
 from src import db_utils, tan_chess, vanilla_transformer, performance
-from src.tan_chess.gui_player import GUIPlayer
+from src.tan_chess import GUIPlayer
 
 logging.basicConfig(
     format="[%(filename)s:%(lineno)s@%(funcName)s][%(levelname)s] %(message)s",
