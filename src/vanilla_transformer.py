@@ -27,7 +27,18 @@ from src.tan_chess import (
 
 
 class Model(nn.Module):
-    def __init__(self, vocab_sz, context_sz, embd_dim, num_heads, num_transformer_blocks, head_sz, lr, *, device=None):
+    def __init__(
+        self,
+        vocab_sz,
+        context_sz,
+        embd_dim,
+        num_heads,
+        num_transformer_blocks,
+        head_sz,
+        lr,
+        *,
+        device=None,
+    ):
         super().__init__()
 
         # Store params for saving and loading.
@@ -60,8 +71,11 @@ class Model(nn.Module):
         return logits
 
     def loss(self, logits, y):
-        """Computes loss from logits as returned by forward() with respect to
-        labels y."""
+        """
+        Computes loss from logits as returned by forward() with respect to
+        labels y.
+        """
+
         B, T, C = logits.shape
         loss = F.cross_entropy(logits.reshape(B * T, C), y.reshape(B * T))
         return loss
@@ -70,6 +84,7 @@ class Model(nn.Module):
         """
         Trains on data provided by a data loader.
         """
+
         batch_losses = []
 
         def checkpoint(run_eval=False):
@@ -101,7 +116,10 @@ class Model(nn.Module):
         checkpoint(run_eval=True)
 
     def train_batch(self, x, y):
-        """Performes a single training step on batch data x, y"""
+        """
+        Performes a single training step on batch data x, y.
+        """
+
         self.train()
 
         # Forward pass.
@@ -119,7 +137,10 @@ class Model(nn.Module):
 
     @torch.no_grad()
     def eval_loss(self, x, y, chunk_sz=128):
-        """Computes loss in evaluation mode."""
+        """
+        Computes loss in evaluation mode.
+        """
+
         # ???: Why do we oom if we don't chunk the data set?
         training = self.training
         self.eval()
@@ -175,12 +196,11 @@ class Model(nn.Module):
 
         return result
 
-    # @torch.no_grad()
-    # def eval_performance(self):
-
 
 class AttentionHead(nn.Module):
-    """Single head of masked self-attention"""
+    """
+    Single head of masked self-attention.
+    """
 
     def __init__(self, fan_in, head_sz, context_sz):
         super().__init__()
@@ -209,7 +229,9 @@ class AttentionHead(nn.Module):
 
 
 class MultiHeadAttention(nn.Module):
-    """Multi-head scaled self-attention with subsequent concatenation and linear layer"""
+    """
+    Multi-head scaled self-attention with subsequent concatenation and linear layer.
+    """
 
     def __init__(self, in_features, num_heads, head_sz, context_sz, out_features=None):
         super().__init__()
@@ -229,7 +251,9 @@ class MultiHeadAttention(nn.Module):
 
 
 class FeedForward(nn.Module):
-    """Feedfoward network following a multi-head attention block"""
+    """
+    Feedfoward network following a multi-head attention block.
+    """
 
     def __init__(self, in_features, hidden_features=None, out_features=None):
         super().__init__()
@@ -247,9 +271,19 @@ class FeedForward(nn.Module):
 
 
 class TransformerBlock(nn.Module):
-    """Transformer Block with residual connections and layer normalization"""
+    """
+    Transformer Block with residual connections and layer normalization.
+    """
 
-    def __init__(self, in_features, num_head, head_sz, context_sz, hidden_features=None, out_features=None):
+    def __init__(
+        self,
+        in_features,
+        num_head,
+        head_sz,
+        context_sz,
+        hidden_features=None,
+        out_features=None,
+    ):
         super().__init__()
 
         if hidden_features is None:

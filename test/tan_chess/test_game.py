@@ -23,11 +23,12 @@ def import_all_modules(package_name: str):
             import_all_modules(full_module_name)
 
 
-@pytest.fixture
-def tan_player_subclasses():
+@pytest.fixture(name="tan_player_subclasses")
+def fixture_tan_player_subclasses():
     """
     Returns all subclasses of TANPlayer. Imports all modules in the src/
-    directory, so that all subclasses are found.
+    directory, so that all subclasses are will be registered by the time their
+    list is returned.
     """
 
     import_all_modules("src")
