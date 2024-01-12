@@ -21,7 +21,7 @@ from src.tan_chess import (
     TANPlayer,
     TAN_MOVELINE_CHARS,
     TAN_MAX_MOVE_LEN,
-    is_valid,
+    is_valid_move,
     tan_moveline_from_gameline,
 )
 
@@ -391,7 +391,7 @@ class TransformerPlayer(TANPlayer):
 
             # Decode generated move.
             move = decode_moveline_tensor(movetensor_buffer[self.write_idx : write_idx_buffer])
-            if is_valid(move, self.board):
+            if is_valid_move(move, self.board):
                 return move
 
         return TransformerPlayer.ResignationReason.CANT_CONSTRUCT_VALID_MOVE

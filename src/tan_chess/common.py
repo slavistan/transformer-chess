@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from copy import deepcopy
 from enum import Enum
 from typing import Sequence
 
@@ -8,6 +9,8 @@ import chess
 
 TANMove = str
 TANMoveList = Sequence[TANMove]
+TANMoveLine = str
+TANGameLine = str
 
 # Characters required to express a single move in TAN format, e.g. 'a4', 'Qxb4'
 # or 'O-O-O'.
@@ -103,3 +106,82 @@ def uci_to_tan(
         move = variation[movepos + 1 :]
 
     return move
+
+
+def tan_moveline_from_gameline(
+    tan_gameline: TANGameLine,
+) -> TANMoveLine:
+    """
+    Given a valid gameline in TAN format returns the corresponding moveline in
+    TAN format.
+
+    Movelines are returned unmodified.
+    """
+
+    tan_gameline = tan_gameline.rstrip()
+    if tan_gameline.endswith(TAN_EOG_CHARS):
+        return tan_gameline[:-2]  # strip eog char and trailing whitespace
+    return tan_gameline
+
+
+def is_valid_move(
+    move: TANMove | str,
+    board: chess.Board,
+) -> bool:
+    """
+    Returns true if the move is valid, given a position. The `board` object is
+    not modified.
+
+    :param move: move in TAN format
+    :param board: chess.board object representing the position
+    """
+
+    # Pychess doesn't offer a method to check the validity of a move in SAN
+    # notation, so we have to call push_san() directly and look for exceptions.
+    # However, we must not modify the move stack and thus we do this on a copy
+    # of the board.
+    try:
+        deepcopy(board).push_san(move)
+    except (chess.InvalidMoveError, chess.IllegalMoveError, chess.AmbiguousMoveError):
+        return False
+    return True
+
+
+def is_valid_moveline(
+    moveline: TANMoveLine,
+) -> bool:
+    """
+    Returns true if the moveline is valid, as determined by the following
+    defining criteria:
+      - moveline is a string
+      - moveline must consist of legal characters only (e.g. no SAN annotations)
+      - moves must be separated by a single whitespace
+      - moveline must not have surrounding whitespaces
+      - moveline must constitute a series of valid moves
+    """
+
+    # Moveline must be a string.
+    if not isinstance(moveline, TANMoveLine):
+        return False
+
+    # Moveline must only consists of allowed characters.
+    if set(moveline) | set(TAN_MOVELINE_CHARS) != set(TAN_MOVELINE_CHARS):
+        return False
+
+    # Moveline must separate moves by exactly one whitespace.
+    if moveline.find("  ") != -1:
+        return False
+
+    # Moveline must not be surrounded by spurious whitespaces.
+    if moveline.strip() != moveline:
+        return False
+
+    # Moveline must constitute a series of valid moves.
+    board = chess.Board()
+    try:
+        for m in moveline.split(" "):
+            board.push_san(m)
+    except (chess.AmbiguousMoveError, chess.InvalidMoveError, chess.IllegalMoveError):
+        return False
+
+    return True

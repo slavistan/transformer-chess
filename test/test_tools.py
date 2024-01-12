@@ -1,15 +1,23 @@
 from __future__ import annotations
+
 from itertools import accumulate
 import os
 import itertools
 from pathlib import Path
 import array
-import pytest
 import multiprocessing as mp
-from typing import Callable, Type, Any
+
 import pytest
+
 from src.tools import *
-from src.db_utils import splitfn_chunk, processfn_find_lines, collectfn_get_lines, splitfn_lines, pgn_to_tan, pgn_gameline_to_tan
+from src.db_utils import (
+    splitfn_chunk,
+    processfn_find_lines,
+    collectfn_get_lines,
+    splitfn_lines,
+    pgn_to_tan,
+    pgn_gameline_to_tan,
+)
 
 utf8_file = "test/assets/utf-8.txt"
 assert os.path.getsize(utf8_file) == 581  # single page
@@ -570,6 +578,7 @@ class Test_splitfn_lines:
         assert len(have) == len(have)
         assert have == want
 
+
 class Test_pgn_to_tan:
     assert pgn_to_tan.__name__ == "pgn_to_tan"
 
@@ -587,4 +596,3 @@ class Test_pgn_to_tan:
 
         assert len(want) == len(have)
         assert want == have
-

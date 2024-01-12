@@ -1,4 +1,5 @@
 import importlib
+from itertools import repeat
 import pkgutil
 from typing import Union, IO
 import mmap
@@ -7,6 +8,24 @@ import sys
 import contextlib
 
 import torch
+
+
+def starmap_with_kwargs(pool, fn, args_iter, kwargs_iter):
+    """
+    Multiprocessing helper extending mp.starmap with kwargs. See
+    https://stackoverflow.com/a/53173433.
+    """
+
+    args_for_starmap = zip(repeat(fn), args_iter, kwargs_iter)
+    return pool.starmap(_apply_args_and_kwargs, args_for_starmap)
+
+
+def _apply_args_and_kwargs(fn, args, kwargs):
+    """
+    Helper for `starmap_with_kwargs`.
+    """
+
+    return fn(*args, **kwargs)
 
 
 def count_lines_in_file(file_path: str, *, max_lines=sys.maxsize) -> int:

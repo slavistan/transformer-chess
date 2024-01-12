@@ -11,7 +11,7 @@ from .common import (
     TANMove,
     TANMoveList,
     TANPlayer,
-    TAN_EOG_CHARS,
+    is_valid_move,
 )
 from .players import PresetPlayer
 
@@ -185,7 +185,7 @@ def play_game(
         if isinstance(response, TANMove):
             # Player returned a move.
             move = response
-            if not is_valid(move, board):
+            if not is_valid_move(move, board):
                 outcome_name = f"{'WHITE' if not board.turn else 'BLACK'}_WINS_DQ_INVALID_MOVE"
                 outcome = Outcome[outcome_name]
                 return {
@@ -218,44 +218,10 @@ def get_outcome(
     Inconclusive games will result in a resignation signal.
     """
 
-    # TODO: Was, wenn Spiel nicht terminiert? play_game kann hier so nicht verwendet werden.
-    # TODO: Was, wenn die Züge ungültig sind?
+    # We retrieve the outcome of a game by playing it out using a PresetPlayer.
+    # Incomplete games are detected by the player resigning due to exceeding
+    # the preset list of moves. Invalid games are detected by play_game itself.
     game = play_game(PresetPlayer(movelist), opening=movelist)
-    # We detect inconclusive games by waiting for the preset player for resign
-    # due to exceeding the preset move list.
     if game["outcome"] in (Outcome.WHITE_WINS_RESIGNATION_PRESETPLAYER_EXCEEDED_PRESET, Outcome.BLACK_WINS_RESIGNATION_PRESETPLAYER_EXCEEDED_PRESET):
         return Outcome.INCOMPLETE_GAME
     return game["outcome"]
-
-
-def tan_moveline_from_gameline(
-    tan_gameline: str,
-) -> str:
-    tan_gameline = tan_gameline.rstrip()
-    if tan_gameline.endswith(TAN_EOG_CHARS):
-        return tan_gameline[:-2]  # strip eog char and trailing whitespace
-    return tan_gameline
-
-
-# TODO: test
-def is_valid(
-    move: TANMove | str,
-    board: chess.Board,
-) -> bool:
-    """
-    Returns true if the move is valid, given a position. The `board` object is
-    not modified.
-
-    :param move: move in TAN format
-    :param board: chess.board object representing the position
-    """
-
-    # Pychess doesn't offer a method to check the validity of a move in SAN
-    # notation, so we have to call push_san() directly and look for exceptions.
-    # However, we must not modify the move stack and thus do this on a copy of
-    # the board.
-    try:
-        deepcopy(board).push_san(move)
-    except ValueError:
-        return False
-    return True

@@ -32,7 +32,7 @@ class PresetPlayer(TANPlayer):
         self,
         movelist: TANMoveList,
     ):
-        self.reset(movelist)
+        self.movelist = movelist
 
     def push_moves(
         self,
@@ -57,8 +57,7 @@ class PresetPlayer(TANPlayer):
 
         return self.movelist[self.move_idx]
 
-    def reset(self, movelist: TANMoveList = ()) -> PresetPlayer:
-        self.movelist = movelist
+    def reset(self) -> PresetPlayer:
         self.move_idx = 0
         self.diverged_from_preset = False
         return self

@@ -1,36 +1,76 @@
-from typing import Tuple, Callable, List, Literal, TypedDict, Iterable, LiteralString, cast, Any, Set
-from copy import deepcopy
-from collections import defaultdict
-from dataclasses import dataclass
+from typing import Tuple, List, Literal, TypedDict, Iterable, cast
 import subprocess
-import multiprocessing as mp
-import json
-from itertools import repeat
-import logging
-import numpy as np
 import time
+import os
+import multiprocessing as mp
+import logging
+
+import numpy as np
 import pandas as pd
 import chess
-import os
-from src.db_utils import tan_gameline_to_moveline, san_move_to_tan
-from src import vanilla_transformer
 from plotnine import *
 
+from src.tools import starmap_with_kwargs
+from .common import (
+    TANMove,
+    TANMoveList,
+    TANPlayer,
+    tan_moveline_from_gameline,
+    is_valid_move,
+)
+from .game import Game, play_game
+from .players import RandomPlayer
 
-class PuzzleResult(TypedDict):
-    opening_moves: List[str]
-    candidate_moves: List[str]
-    num_legal_moves: int
-    num_attempts: int
-    num_correct: int
+
+def vs_random(
+    player: TANPlayer,
+    num_games: int,
+    *,
+    play_as: Literal["white", "black"] = "white",
+    num_workers: int = 1,
+) -> List[Game]:
+    """
+    Plays games vs a RandomPlayer.
+
+    Note that there's no point in using massive parallelization if evaluating a
+    transformer player on the cpu, as its forward pass is already parallelized
+    by the pytorch tensor arithmetic implementation. In that case, try
+    `num_workers` of 2 or 3 if you have a lot of cores.
+    """
+
+    # Skip multiprocessing if we're only using a single worker.
+    if num_workers == 1:
+        return _vs_random_worker(player, num_games, play_as=play_as)
+
+    num_workers = min(num_workers, num_games)
+    num_games_per_worker = num_games // num_workers
+    worker_pargs = num_workers * [
+        [
+            player,
+            num_games_per_worker,
+        ]
+    ]
+    worker_kwargs = num_workers * [{"play_as": play_as}]
+    for i in range(num_games - num_games_per_worker * num_workers):
+        worker_pargs[i][1] += 1
+
+    with mp.get_context("spawn").Pool(num_workers) as p:
+        worker_results = starmap_with_kwargs(p, _vs_random_worker, worker_pargs, worker_kwargs)
+
+    result = sum(worker_results, [])
+    return result
 
 
-def _vs_random(
-    player: SANPlayer,
+def _vs_random_worker(
+    player: TANPlayer,
     num_games: int,
     *,
     play_as: Literal["white", "black"] = "white",
 ) -> List[Game]:
+    """
+    Multiprocessing worker for `vs_random`.
+    """
+
     results: List[Game] = []
     random_player = RandomPlayer()
     if play_as == "white":
@@ -48,7 +88,7 @@ def _vs_random(
 
 
 def vs_self(
-    player: SANPlayer,
+    player: TANPlayer,
     num_games: int,
 ) -> List[Game]:
     results: List[Game] = []
@@ -59,54 +99,46 @@ def vs_self(
     return results
 
 
-# TODO: Test
+class PuzzleResult(TypedDict):
+    opening_moves: TANMoveList
+    candidate_moves: Iterable[TANMove]
+    num_legal_moves: int
+    num_attempts: int
+    num_correct: int
+
+
 def one_move_puzzle(
-    player: SANPlayer,
-    movelist: SANMoveList,
-    candidate_moves: Set[SANMove],
+    player: TANPlayer,
+    opening_moves: TANMoveList,
+    candidate_moves: Iterable[TANMove],
     *,
     num_attempts: int = 1,  # rerun puzzle, relevant for stochastic players
-    num_tries: int = 1,  # number of tries until a valid move is returned, relevant for transformer players
 ) -> PuzzleResult:
-    player.reset(movelist)
-    counter = 0
+    player.reset()
+    player.push_moves(opening_moves)
 
     board = chess.Board()
-    for move in movelist:
+    for move in opening_moves:
         board.push_san(move)
-    num_legal = len(list(board.legal_moves))
 
+    num_correct = 0
     for _ in range(num_attempts):
-        move_tan = ""
-        suggested_legal_move = False
-        for _ in range(num_tries):
-            move = player.suggest_move()
-            if isinstance(move, PlayerSignal):
-                continue
-            move_tan = strip(move)
+        move = player.suggest_move()
+        if not isinstance(move, TANMove):
+            continue
 
-            # Check if move is legal. Pychess doesn't offer a method to check
-            # the validity of a move in SAN notation, so we have to call
-            # push_san() directly and look for exceptions. However, we must not
-            # modify the move stack and thus keep a buffer of the board.
-            board_buf = deepcopy(board)
-            try:
-                board.push_san(move_tan)
-            except ValueError:
-                continue
-            board = board_buf
-            suggested_legal_move = is_valid(move_tan, board)
-            break
+        if not is_valid_move(move, board):
+            continue
 
-        if suggested_legal_move and move_tan in candidate_moves:
-            counter += 1
+        if move in candidate_moves:
+            num_correct += 1
 
     return {
-        "opening_moves": movelist,
+        "opening_moves": opening_moves,
         "candidate_moves": candidate_moves,
-        "num_legal_moves": num_legal,
+        "num_legal_moves": len(list(board.legal_moves)),
         "num_attempts": num_attempts,
-        "num_correct": counter,
+        "num_correct": num_correct,
     }
 
 
@@ -120,7 +152,7 @@ def one_move_puzzle_from_tan(tan_file: str, *, num_games: int):
     """
     with open(tan_file, "r") as f:
         for i, line in enumerate(f):
-            moveline = tan_gameline_to_moveline(line)
+            moveline = tan_moveline_from_gameline(line)
             movelist = moveline.split(" ")
             puzzle_movelist = movelist[:-1]
             puzzle_candidate_moves = [movelist[-1]]
@@ -138,7 +170,7 @@ class EvalResult(TypedDict):
 
 
 def full_eval(
-    player: SANPlayer,
+    player: TANPlayer,
     puzzles: List[Tuple[List[str], List[str]]],
     *,
     num_random=16,
@@ -191,47 +223,6 @@ def full_eval(
     return result
 
 
-def vs_random(
-    player: SANPlayer,
-    num_games: int,
-    *,
-    play_as: Literal["white", "black"] = "white",
-    num_workers: int = 1,
-) -> List[Game]:
-    """
-    Note that there's no point in using massive parallelization if evaluating a
-    transformer player on the cpu, as its forward pass is already parallelized
-    by the pytorch tensor arithmetic implementation. In that case, try
-    `num_workers` of 2 or 3 if you have a lot of cores.
-    """
-
-    num_games_per_worker = num_games // num_workers
-    worker_pargs = num_workers * [
-        [
-            player,
-            num_games_per_worker,
-        ]
-    ]
-    worker_kwargs = num_workers * [{"play_as": play_as}]
-    for i in range(num_games - num_games_per_worker * num_workers):
-        worker_pargs[i][1] += 1
-
-    with mp.get_context("spawn").Pool(num_workers) as p:
-        worker_results = starmap_with_kwargs(p, _vs_random, worker_pargs, worker_kwargs)
-
-    result = sum(worker_results, [])
-    return result
-
-
-def starmap_with_kwargs(pool, fn, args_iter, kwargs_iter):
-    args_for_starmap = zip(repeat(fn), args_iter, kwargs_iter)
-    return pool.starmap(_apply_args_and_kwargs, args_for_starmap)
-
-
-def _apply_args_and_kwargs(fn, args, kwargs):
-    return fn(*args, **kwargs)
-
-
 def plot_outcome_hist(games: List[Game]) -> ggplot:
     outcomes = [str(g["outcome"]).partition(".")[2] for g in games]
     df = pd.DataFrame.from_dict({"outcomes": outcomes})
@@ -240,7 +231,7 @@ def plot_outcome_hist(games: List[Game]) -> ggplot:
 
 
 def plot_game_len_hist(
-    games: List[Game],
+    games: Iterable[Game],
     *,
     binwidth=7,
 ) -> ggplot:
@@ -251,9 +242,9 @@ def plot_game_len_hist(
     return plot
 
 
-def mean_game_len(games: List[Game]) -> Tuple[float, float]:
+def mean_game_len(games: Iterable[Game]) -> Tuple[float, float]:
     lengths = [len(g["moves"]) for g in games]
-    mean, std = np.mean(lengths).astype(float), np.std(lengths).astype(float)
+    mean, std = np.mean(lengths), np.std(lengths)
     return mean, std
 
 
@@ -304,6 +295,7 @@ def make_report(eval_json: str, output: str):
     """
     Compiles codebraid markdown.
     """
+
     CODEBRAID_TEMPLATE = "./eval/full-eval-codebraid.md"
     DATA_FILE_ENVVAR = "DATA_JSON"  # Envvar containing path to data file.
 
@@ -336,41 +328,41 @@ def make_report(eval_json: str, output: str):
     return result
 
 
-def full_eval_transformer(
-    pth_file: str,
-    data_output_path: str,
-    report_output_path: str,
-    *,
-    num_random=64,
-    num_self=64,
-    num_puzzles=256,
-    num_puzzle_attempts=64,
-    num_workers=1,
-    num_tries_until_valid=16,
-):
-    # TODO: machine-independent way of storing puzzles
-    puzzles = list(
-        one_move_puzzle_from_tan(
-            "./data/2309-checkmate.tan",
-            num_games=num_puzzles,
-        )
-    )
+# def full_eval_transformer(
+#     pth_file: str,
+#     data_output_path: str,
+#     report_output_path: str,
+#     *,
+#     num_random=64,
+#     num_self=64,
+#     num_puzzles=256,
+#     num_puzzle_attempts=64,
+#     num_workers=1,
+#     num_tries_until_valid=16,
+# ):
+#     # TODO: machine-independent way of storing puzzles
+#     puzzles = list(
+#         one_move_puzzle_from_tan(
+#             "./data/2309-checkmate.tan",
+#             num_games=num_puzzles,
+#         )
+#     )
 
-    m = vanilla_transformer.Model.load(pth_file).to("cpu")
-    player = vanilla_transformer.TransformerPlayer(m, num_tries_until_valid=num_tries_until_valid)
-    eval_results = full_eval(
-        player,
-        puzzles,
-        num_random=num_random,
-        num_self=num_self,
-        num_puzzle_attempts=num_puzzle_attempts,
-        num_workers=num_workers,
-    )
+#     m = vanilla_transformer.Model.load(pth_file).to("cpu")
+#     player = vanilla_transformer.TransformerPlayer(m, num_tries_until_valid=num_tries_until_valid)
+#     eval_results = full_eval(
+#         player,
+#         puzzles,
+#         num_random=num_random,
+#         num_self=num_self,
+#         num_puzzle_attempts=num_puzzle_attempts,
+#         num_workers=num_workers,
+#     )
 
-    with open(data_output_path, "w") as f:
-        json.dump(eval_results, f, indent=4, default=str)
+#     with open(data_output_path, "w") as f:
+#         json.dump(eval_results, f, indent=4, default=str)
 
-    return make_report(data_output_path, report_output_path)
+#     return make_report(data_output_path, report_output_path)
 
 
 # TODO: num_retries off-by-one Verhalten angleichen. Parameter sollte Anzahl der Iterationen angeben.

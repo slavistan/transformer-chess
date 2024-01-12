@@ -1,13 +1,10 @@
-"""Tests for db_utils.py"""
-
-from src import db_utils, tan_chess
 import multiprocessing as mp
 import os
 from pathlib import Path
 
+from src import db_utils, tan_chess
 
 def test_san_gameline_to_tan():
-    """Tests san_game_to_tan()."""
     table = (
         (
             r"1. e4 { [%clk 0:01:00] } 1... c5 { [%clk 0:01:00] } 2. Nf3 { [%clk 0:00:59] } 2... Nc6 { [%clk 0:01:00] } 3. c3 { [%clk 0:00:58] } 3... e5 { [%clk 0:00:59] } 4. d4 { [%clk 0:00:58] } 4... cxd4 { [%clk 0:00:59] } 5. cxd4 { [%clk 0:00:58] } 5... exd4 { [%clk 0:00:59] } 6. Nxd4 { [%clk 0:00:57] } 6... Nf6 { [%clk 0:00:59] } 7. Nxc6 { [%clk 0:00:56] } 7... bxc6 { [%clk 0:00:59] } 8. Nc3 { [%clk 0:00:56] } 8... Bb4 { [%clk 0:00:58] } 9. f3 { [%clk 0:00:54] } 9... O-O { [%clk 0:00:57] } 10. Bd2 { [%clk 0:00:53] } 10... a5 { [%clk 0:00:57] } 11. a3 { [%clk 0:00:52] } 11... Be7 { [%clk 0:00:56] } 12. Bc4 { [%clk 0:00:51] } 12... Ba6 { [%clk 0:00:56] } 13. Qe2 { [%clk 0:00:50] } 13... Bxc4 { [%clk 0:00:54] } 14. Qxc4 { [%clk 0:00:50] } 14... Qc7 { [%clk 0:00:54] } 15. O-O { [%clk 0:00:49] } 15... Rac8 { [%clk 0:00:53] } 16. Qd3 { [%clk 0:00:48] } 16... Rfd8 { [%clk 0:00:52] } 17. Bg5 { [%clk 0:00:45] } 17... h6 { [%clk 0:00:51] } 18. Bxf6 { [%clk 0:00:44] } 18... Bxf6 { [%clk 0:00:51] } 19. Rad1 { [%clk 0:00:43] } 19... Qb6+ { [%clk 0:00:49] } 20. Kh1 { [%clk 0:00:37] } 20... Qxb2 { [%clk 0:00:48] } 21. Ne2 { [%clk 0:00:37] } 21... c5 { [%clk 0:00:45] } 22. Rd2 { [%clk 0:00:37] } 22... Qe5 { [%clk 0:00:43] } 23. Nc1 { [%clk 0:00:34] } 23... c4 { [%clk 0:00:42] } 24. Qe2 { [%clk 0:00:34] } 24... c3 { [%clk 0:00:41] } 25. Na2 { [%clk 0:00:34] } 25... cxd2 { [%clk 0:00:40] } 26. Nc3 { [%clk 0:00:33] } 26... Qxc3 { [%clk 0:00:39] } 27. Qf2 { [%clk 0:00:32] } 27... Qc1 { [%clk 0:00:37] } 28. Qg3 { [%clk 0:00:32] } 28... Qxf1# { [%clk 0:00:36] } 0-1",
