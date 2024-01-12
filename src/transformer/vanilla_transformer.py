@@ -1,28 +1,20 @@
 from __future__ import annotations
 
-from enum import Enum, auto
 import sys
 import subprocess
 from datetime import datetime
 import math
-from typing import Sequence
 
 import numpy as np
 import torch
 from torch.utils.data import Dataset
 from torch import nn
 from torch.nn import functional as F
-import chess
 
 from src.tools import count_lines_in_file, torch_elem_size
-from src.tan_chess import (
-    TANMoveList,
-    TANMove,
-    TANPlayer,
-    TAN_MOVELINE_CHARS,
-    TAN_MAX_MOVE_LEN,
-    is_valid_move,
-    tan_moveline_from_gameline,
+from src.tan_chess import tan_moveline_from_gameline
+from .tools import (
+    encode_moveline_as_np8,
 )
 
 
@@ -302,148 +294,6 @@ class TransformerBlock(nn.Module):
         x = self.layer_norm2(x)
         x = x + self.feed_forward(x)
         return x
-
-
-class TransformerPlayer(TANPlayer):
-    board: chess.Board
-    model: Model
-    model_context_sz: int
-    model_device: str
-    movetensor: torch.Tensor
-    write_idx: int
-    context_overflow: bool
-    num_tries_until_valid: int
-
-    def __init__(
-        self,
-        model: Model,
-        movelist=(),
-        num_tries_until_valid=1,
-    ):
-        self.model = model
-        self.model_context_sz = self.model.init_params["context_sz"]
-        self.model_device = "cuda" if next(model.parameters()).is_cuda else "cpu"
-        self.reset(movelist, num_tries_until_valid)
-
-    def push_moves(
-        self,
-        movelist: TANMoveList,
-    ) -> TransformerPlayer:
-        if self.context_overflow:
-            return self
-
-        for m in movelist:
-            encd = encode_moveline_as_np8(m + " ")
-            num_tokens = len(encd)
-
-            # Silently stop adding moves once we've reached the end of the
-            # tensor. Resignation will follow.
-            if self.write_idx + num_tokens >= len(self.movetensor):
-                self.context_overflow = True
-                return self
-
-            self.movetensor[self.write_idx : self.write_idx + num_tokens] = torch.from_numpy(encd)
-            self.write_idx += num_tokens
-            self.board.push_san(m)
-
-        return self
-
-    def suggest_move(
-        self,
-    ) -> TransformerPlayer.ResignationReason | TANMove:
-        if self.context_overflow:
-            return TransformerPlayer.ResignationReason.CONTEXT_OVERFLOW
-
-        for _ in range(self.num_tries_until_valid):
-            movetensor_buffer = self.movetensor.clone()
-            write_idx_buffer = self.write_idx
-
-            while True:
-                token = self.model.generate(movetensor_buffer[:write_idx_buffer], num_tokens=1).item()
-
-                # Abort once we exceed the maximum number of characters a move
-                # in TAN format can consist of.
-                num_generated_tokens = write_idx_buffer - self.write_idx
-                if num_generated_tokens >= TAN_MAX_MOVE_LEN:
-                    break
-
-                # Skip over padding tokens.
-                # TODO: Padding tokens erscheinen in den Daten nach dem letzten
-                #       Zug eines Spiels, sind also Teil eines sinnvollen Outputs.
-                #       Vielleicht sollte ich padding tokens und whitespaces gleich
-                #       behandeln.
-                #       Alternativvorschlag: Spiele werden direkt mit einem extra Leerzeichen
-                #                            am Ende der Zugsequenz kodiert, sodass Paddingtokens
-                #                            niemals nach einem Zug erscheinen.
-                if token == PADDING_IDX:
-                    continue
-
-                # Break if whitespace is returned. Whitespace is not part of
-                # the returned move. However, continue if no tokens have been
-                # generated yet.
-                if token == WHITESPACE_IDX:
-                    if num_generated_tokens == 0:
-                        continue
-                    break
-
-                movetensor_buffer[write_idx_buffer] = token
-                write_idx_buffer += 1
-
-            # Decode generated move.
-            move = decode_moveline_tensor(movetensor_buffer[self.write_idx : write_idx_buffer])
-            if is_valid_move(move, self.board):
-                return move
-
-        return TransformerPlayer.ResignationReason.CANT_CONSTRUCT_VALID_MOVE
-
-    def reset(
-        self,
-        movelist: TANMoveList = (),
-        num_tries_until_valid=1,
-    ) -> TransformerPlayer:
-        self.board = chess.Board()
-        self.movetensor = torch.zeros(
-            (self.model_context_sz,),
-            dtype=torch.uint8,
-            device=self.model_device,
-            requires_grad=False,
-        )
-        self.write_idx = 1  # write pointer; 0 is reserved for padding
-        self.context_overflow = False
-        self.num_tries_until_valid = num_tries_until_valid
-
-        self.push_moves(movelist)
-
-        return self
-
-    class ResignationReason(Enum):
-        CONTEXT_OVERFLOW = auto()
-        """Preset context size of transformer exceeded by game tokens"""
-
-        CANT_CONSTRUCT_VALID_MOVE = auto()
-        """Failed to produce a valid move after a set amount of attempts"""
-
-
-encode_moveline_dict = {c: np.uint8(i) for i, c in enumerate(TAN_MOVELINE_CHARS, 1)}
-decode_moveline_dict = {i: c for c, i in encode_moveline_dict.items()}
-WHITESPACE_IDX = encode_moveline_dict[" "]
-PADDING_IDX = 0
-
-
-def encode_moveline_as_np8(tan_moveline: str) -> np.ndarray:
-    result = np.empty(len(tan_moveline), dtype=np.uint8)
-    for i, c in enumerate(tan_moveline):
-        result[i] = encode_moveline_dict[c]
-    return result
-
-
-def decode_moveline_tensor(tan_tokens: torch.Tensor) -> str:
-    # TODO: Convert
-    return "".join([decode_moveline_dict[np.uint8(t)] for t in tan_tokens.cpu()])
-
-
-def decode_moveline(tan_tokens: Sequence[int]) -> str:
-    return "".join([decode_moveline_dict[np.uint8(t)] for t in tan_tokens])
 
 
 class Dump(Dataset):
