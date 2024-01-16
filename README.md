@@ -12,3 +12,10 @@
 # TODO: Abdeckung legaler Züge des Transformers evaluieren
 #       - Alle legalen Züge ausgeben und via "Beamsearch" vergleichen
 # TODO: SANPlayer.suggest_moves() könnte Züge mit Konfidenz zurückgeben `(sig, {"a4", 0.3, "Qxf1": 0.7})`
+# TODO: Proxytask 'Erkennen des Gewinners am Ende eines definiten Spiels' könnte eigentliche Aufgabe (Schachspielen) verbessern
+
+Idee
+- RandomPlayers zur Erzeugung von Trainingsspielen verwenden
+- Schachbrett mit Anzahl benötigter Wiederholungen versehen
+- Schachbrett mit Wahrscheinlichkeitsmasse der legalen Züge versehen
+- Headsize automatisch aus Anzahl Heads und Embeddingdim bestimmen

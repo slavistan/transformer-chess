@@ -1,24 +1,24 @@
 from __future__ import annotations
 
-import sys
+import os
+import time
 import subprocess
 from datetime import datetime
-import math
 
 import numpy as np
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
 from torch import nn
 from torch.nn import functional as F
 
-from src.tools import count_lines_in_file, torch_elem_size
-from src.tan_chess import tan_moveline_from_gameline
+from src.tools import lines
 from .tools import (
-    encode_moveline_as_np8,
+    encode_gameline,
+    PADDING_TOKEN_ID,
 )
 
 
-class Model(nn.Module):
+class VanillaTransformer(nn.Module):
     def __init__(
         self,
         vocab_sz,
@@ -29,7 +29,7 @@ class Model(nn.Module):
         head_sz,
         lr,
         *,
-        device=None,
+        device="cpu",
     ):
         super().__init__()
 
@@ -51,8 +51,11 @@ class Model(nn.Module):
         # Optimizer
         self.optimizer = torch.optim.AdamW(self.parameters(), lr=lr)
 
-        if device is not None:
-            self.to(device)
+        # ???: How to I move the whole thing to the device?
+        self.device = device
+        self.to(self.device)
+        for p in self.parameters():
+            p = p.to(self.device)
 
     def forward(self, x):
         # x: B, T (integer encoded)
@@ -69,14 +72,26 @@ class Model(nn.Module):
         """
 
         B, T, C = logits.shape
-        loss = F.cross_entropy(logits.reshape(B * T, C), y.reshape(B * T))
+        loss = F.cross_entropy(
+            logits.reshape(B * T, C),
+            y.reshape(B * T),
+            # TODO: Konvergiert nicht, wenn padding tokens ignoriert werden. Wallom?
+            # ignore_index=PADDING_TOKEN_ID,
+        )
         return loss
 
-    def train_epoch(self, data_loader, *, checkpoint_every=None, checkpt_dir="./models"):
+    def train_epoch(
+        self,
+        data_loader: DataLoader,
+        *,
+        checkpoint_every=None,
+        checkpt_dir="./models",
+    ):
         """
         Trains on data provided by a data loader.
         """
 
+        start = time.time()
         batch_losses = []
 
         def checkpoint(run_eval=False):
@@ -84,7 +99,7 @@ class Model(nn.Module):
             nonlocal batch_idx
             loss_mean, loss_std = np.mean(batch_losses), np.std(batch_losses)
             now = str(datetime.now())
-            print(f"Batch {batch_idx}: mean batch loss: {loss_mean} +- {loss_std}")
+            print(f"\nBatch {batch_idx}: mean batch loss: {loss_mean} +- {loss_std}")
             checkpt_path = checkpt_dir + "/" + f"checkpt-{now}.pth"
             self.save(checkpt_path)
 
@@ -99,20 +114,26 @@ class Model(nn.Module):
 
             batch_losses = []
 
-        for batch_idx, (x, y) in enumerate(data_loader, 0):
+        for batch_idx, (x, y) in enumerate(data_loader, 1):
             loss = self.train_batch(x, y)
+
+            bps = batch_idx / (time.time() - start)
+            eta = (len(data_loader) - batch_idx) / bps
+            print("\r" * 100 + f"batch {batch_idx}/{len(data_loader)}: batch loss {loss:.4f} ({bps:.2f} bps, ETA {eta:.2f}s)", end="", flush=True)
             batch_losses.append(loss)
 
             if checkpoint_every is not None and batch_idx % checkpoint_every == 0:
                 checkpoint()
-        checkpoint(run_eval=True)
+        checkpoint(run_eval=False)
 
-    def train_batch(self, x, y):
+    def train_batch(self, x: torch.Tensor, y: torch.Tensor):
         """
         Performes a single training step on batch data x, y.
         """
 
         self.train()
+        x = x.to(self.device)
+        y = y.to(self.device)
 
         # Forward pass.
         logits = self(x)
@@ -151,7 +172,7 @@ class Model(nn.Module):
         torch.save(self, path)
 
     @staticmethod
-    def load(path) -> Model:
+    def load(path) -> VanillaTransformer:
         return torch.load(path)
 
     @torch.no_grad()
@@ -171,7 +192,7 @@ class Model(nn.Module):
         for i in range(num_tokens):
             # Get logits for last time step
             logits = self(x)
-            logits = logits[:, -1, :]  # (B, vocab_sz)
+            logits = logits[:, -1, :] / .2  # (B, vocab_sz)
             probs = logits.softmax(-1)  # (B, vocab_sz)
             prediction = torch.multinomial(probs, num_samples=1)  # (B, 1)
             result[:, i : i + 1] = prediction
@@ -296,24 +317,14 @@ class TransformerBlock(nn.Module):
         return x
 
 
-class Dump(Dataset):
-    def __init__(self, tan_file: str, context_size: int, *, device=None, max_size=sys.maxsize, dtype=torch.uint8):
-        width = context_size + 1  # tensor width
-        max_lines = math.floor(max_size / torch_elem_size(dtype) / width)
-        height = count_lines_in_file(tan_file, max_lines=max_lines)  # tensor height
-        self.data = torch.zeros((height, width), dtype=dtype)
-        with open(tan_file, "r") as f:
-            for i, gameline in enumerate(f):
-                if i >= max_lines:
-                    break
+class RAMDump(Dataset):
+    data: torch.Tensor
 
-                moveline = tan_moveline_from_gameline(gameline)
-                n = min(len(moveline), context_size)
-                encd = encode_moveline_as_np8(moveline[:n])
-                self.data[i, 1 : n + 1] = torch.from_numpy(encd)
-
-        if device is not None:
-            self.data = self.data.to(device)
+    def __init__(
+        self,
+        data: torch.Tensor,
+    ):
+        self.data = data
 
     def __getitem__(self, idx):
         return self.data[idx, :-1], self.data[idx, 1:]
@@ -323,3 +334,52 @@ class Dump(Dataset):
 
     def mem_size(self):
         return self.data.nelement() * self.data.element_size()
+
+    @staticmethod
+    def from_tan_file(
+        tan_file_path: str,
+        context_size: int,
+    ) -> RAMDump:
+        # Tensor width and height.
+        width = context_size + 1
+        height = sum((1 for _ in lines(tan_file_path, max_len=width)))
+
+        # Initialize tensor with the padding token's id.
+        data = torch.full((height, width), fill_value=PADDING_TOKEN_ID, dtype=torch.uint8)
+        for i, line in enumerate(lines(tan_file_path, max_len=width)):
+            gameline = line.rstrip()
+            encd = encode_gameline(gameline)
+            data[i, : len(encd)] = encd
+            if (i + 1) % 10000 == 0 or (i + 1) == height:
+                progress = f"{i+1}/{height}"
+                print("\r" * len(progress), f"Loading games to memory: {i+1}/{height}", end="")
+        print()
+
+        return RAMDump(data)
+
+    @staticmethod
+    def tan_to_tensor_file(
+        tan_gameline_file: str,
+        context_size: int,
+        output_path: str,  # path to output file
+    ):
+        """
+        Parses a file containing newline-separated TAN gamelines. The games are encoded
+        (tokenized) and written to a 'torch.Tensor' of dtype 'torch.uint8'.
+
+        Games, whose encoded data would exceed the context size are skipped. The resulting
+        tensor has 'context_size + 1' columns and one row per gameline.
+        """
+
+        dataset = RAMDump.from_tan_file(tan_gameline_file, context_size)
+        output_dir = os.path.dirname(output_path)
+        os.makedirs(output_dir, exist_ok=True)
+        torch.save(dataset.data, output_path)
+        print(f"Wrote tensor to '{output_path}'.")
+
+    @staticmethod
+    def from_tensor_file(
+        tensor_file_path: str,
+    ) -> RAMDump:
+        data = torch.load(tensor_file_path)
+        return RAMDump(data)

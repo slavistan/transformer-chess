@@ -99,8 +99,8 @@ class RandomPlayer(TANPlayer):
             return RandomPlayer.ResignationReason.NO_LEGAL_MOVES
 
         move_uci = self.rng.choice(legal_moves)
-        move_san = uci_to_tan(move_uci, self.board)
-        return move_san
+        move_tan = uci_to_tan(move_uci, self.board)
+        return move_tan
 
     def reset(
         self,

@@ -99,6 +99,10 @@ def uci_to_tan(
     # Hack to generate a move in san notation: this will produce a continuation
     # for black, e.g. '11...Rg8' or a move for white: '3. Qd3'.
     variation = board.variation_san([move_uci])
+
+    # Remove any SAN annotations.
+    variation = variation.rstrip("?!+#")
+
     movepos = variation.rfind(".")
     if variation[movepos + 1] == " ":
         move = variation[movepos + 2 :]
@@ -106,6 +110,17 @@ def uci_to_tan(
         move = variation[movepos + 1 :]
 
     return move
+
+
+def trim_san_move(
+    san_move: str,
+) -> TANMove:
+    """
+    Removes annotations from a move in SAN format, returning a move in TAN
+    format.
+    """
+
+    return san_move.rstrip("?!+#")
 
 
 def tan_moveline_from_gameline(
@@ -185,3 +200,19 @@ def is_valid_moveline(
         return False
 
     return True
+
+
+# TODO: test
+def is_game_ending_move(
+    move: TANMove,
+    board: chess.Board,
+) -> bool:
+    """
+    Returns true if the move would end the game. The move must be valid.
+
+    The chess.Board object is not modified.
+    """
+
+    board = deepcopy(board)
+    board.push_san(move)
+    return board.outcome() is not None

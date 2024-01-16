@@ -14,7 +14,7 @@ Live Reload via entr:
 ```{.python .cb-run}
 import os
 import json
-from src import performance
+from src.tan_chess import performance
 from plotnine import labs
 
 data_json = os.environ["DATA_JSON"]

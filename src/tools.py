@@ -40,6 +40,22 @@ def count_lines_in_file(file_path: str, *, max_lines=sys.maxsize) -> int:
     return i
 
 
+def lines(input_file: str, *, max_len=sys.maxsize, max_lines=sys.maxsize):
+    """
+    Returns a generator returning lines of a file whose length, including
+    possible line-breaks, is less than or equal to `max_len`.
+    """
+
+    i = 0
+    with open(input_file, "r") as f:
+        for line in f:
+            if i >= max_lines:
+                return
+            if len(line) <= max_len:
+                i += 1
+                yield line
+
+
 def torch_elem_size(dtype: torch.dtype) -> int:
     """
     Returns the size in bytes of a single element of the given torch dtype.

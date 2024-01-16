@@ -3,7 +3,6 @@ import subprocess
 import time
 import os
 import multiprocessing as mp
-import logging
 
 import numpy as np
 import pandas as pd
@@ -150,6 +149,7 @@ def one_move_puzzle_from_tan(tan_file: str, *, num_games: int):
 
     Returns a generator yielding tuples of (movelist, candidate_moves).
     """
+
     with open(tan_file, "r") as f:
         for i, line in enumerate(f):
             moveline = tan_moveline_from_gameline(line)
@@ -188,7 +188,7 @@ def full_eval(
     # Games against random player
     for side in ("white", "black"):
         start = time.time()
-        logging.info(f"Playing {num_random} games as {side} against random player ... ")
+        print(f"Playing {num_random} games as {side} against random player ... ")
         k = cast(Literal["vs_random_as_white", "vs_random_as_black"], f"vs_random_as_{side}")
         result[k] = vs_random(
             player,
@@ -196,21 +196,21 @@ def full_eval(
             play_as=side,
             num_workers=num_workers,
         )
-        logging.info(f"Done after {int(time.time() - start)}s.")
+        print(f"Done after {int(time.time() - start)}s.")
 
     # Games against self
-    logging.info(f"Playing {num_self} games against self ... ")
+    print(f"Playing {num_self} games against self ... ")
     start = time.time()
     result["vs_self"] = vs_self(player, num_self)
-    logging.info(f"Done after {int(time.time() - start)}s.")
+    print(f"Done after {int(time.time() - start)}s.")
 
     # One-Move Puzzles
     # TODO: Anzahl legaler Züge, Länge der Züge, Anzahl Erfolge, Anzahl versuche
-    logging.info(f"Playing {len(puzzles)} puzzles ... ")
+    print(f"Playing {len(puzzles)} puzzles ... ")
     start = time.time()
     for i, (movelist, candidate_moves) in enumerate(puzzles):
         start = time.time()
-        logging.info(f"{i+1}/{len(puzzles)} puzzles done ...")
+        print(f"{i+1}/{len(puzzles)} puzzles done ...")
         puzzle_result = one_move_puzzle(
             player,
             movelist,
@@ -218,7 +218,7 @@ def full_eval(
             num_attempts=num_puzzle_attempts,
         )
         result["one_move_checkmate_puzzles"].append(puzzle_result)
-    logging.info(f"Done after {int(time.time() - start)}s.")
+    print(f"Done after {int(time.time() - start)}s.")
 
     return result
 
@@ -365,4 +365,6 @@ def make_report(eval_json: str, output: str):
 #     return make_report(data_output_path, report_output_path)
 
 
-# TODO: num_retries off-by-one Verhalten angleichen. Parameter sollte Anzahl der Iterationen angeben.
+
+# TODO: Benchmark-Ideen:
+#       - Länge der Spiele gegen {sich selbst,RandomPlayer}, die aufgrund Zugunfähigkeit enden, als Histogramm anzeigen

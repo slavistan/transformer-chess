@@ -9,8 +9,10 @@ import sys
 import logging
 from torch import cuda
 import clize
-from src import db_utils, tan_chess, vanilla_transformer, performance
+from src import db_utils, tan_chess
 from src.tan_chess import GUIPlayer
+from src.transformer.vanilla_transformer import VanillaTransformer
+from src.transformer.transformer_player import TransformerPlayer, full_eval_transformer
 
 logging.basicConfig(
     format="[%(filename)s:%(lineno)s@%(funcName)s][%(levelname)s] %(message)s",
@@ -27,19 +29,19 @@ def eval_perf(
     num_puzzle=64,
     num_puzzle_attempts=16,
     num_workers=1,
-    num_tries_until_valid=16, # char-level transformer tries
+    num_tries_until_valid=16,  # char-level transformer tries
 ):
     """
     Evaluates the performance of a transformer player.
 
-    :param pth_file: Path to vanilla_transformer.Model checkpoint.
-    :param output_data: Where to store the evaluation metrics in json format.
-    :param output_pdf: Where to store the generated report in pdf format.
-    :num_random: number of games to player against random player.
-    :num_self: number of games to player against self.
-    :num_puzzle: number of one-move checkmate puzzles to player.
-    :num_puzzle_attempts: number of attempts per puzzle.
-    :num_workers: number of cpus for multiprocessing.
+    :param pth_file: path to VanillaTransformer checkpoint.
+    :param output_dir: directory to store the evaluation results in.
+    :param num_random: number of games to play against random player.
+    :param num_self: number of games to play against self.
+    :param num_puzzle: number of one-move checkmate puzzles to player.
+    :param num_puzzle_attempts: number of attempts per puzzle.
+    :param num_workers: number of cpus for multiprocessing.
+    :param num_tries_until_valid: number of attempts to grant a transformer player to generate a valid move.
     """
 
     # Create a lockfile, so that only one process is running concurrently.
@@ -56,7 +58,7 @@ def eval_perf(
             stdout_path = f"{output_dir}/stdout"
             stderr_path = f"{output_dir}/stderr"
 
-            result = performance.full_eval_transformer(
+            result = full_eval_transformer(
                 pth_file=pth_file,
                 data_output_path=output_data_path,
                 report_output_path=output_pdf_path,
@@ -126,8 +128,8 @@ def play_model(
     :param side: Side to play as, either 'white' or 'black'.
     """
 
-    m = vanilla_transformer.Model.load(pth_file).to(device)
-    model_player = vanilla_transformer.TransformerPlayer(m, num_tries_until_valid=16)
+    m = VanillaTransformer.load(pth_file).to(device)
+    model_player = TransformerPlayer(m, num_tries_until_valid=16)
     gui_player = GUIPlayer()
     players = [gui_player, model_player]
     if side == "black":
