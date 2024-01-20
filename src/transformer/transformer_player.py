@@ -1,21 +1,26 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from enum import Enum, auto
 import json
 
-
 import torch
 import chess
+
 
 from src.tan_chess import (
     TAN_MAX_MOVE_LEN,
     TANMove,
     TANMoveList,
+    TANMoveLine,
     TANPlayer,
     is_valid_move,
     full_eval,
     make_report,
     one_move_puzzle_from_tan,
+    is_valid_movelist,
+    is_conclusive_movelist,
+    get_legal_moves,
 )
 from .vanilla_transformer import VanillaTransformer
 from .tools import (
@@ -25,6 +30,7 @@ from .tools import (
     END_OF_GAME_TOKEN_ID,
     encode_move,
     decode_move,
+    encode_moveline,
 )
 
 
@@ -149,6 +155,39 @@ class TransformerPlayer(TANPlayer):
 
         CANT_CONSTRUCT_VALID_MOVE = auto()
         """Failed to produce a valid move after a set amount of attempts"""
+
+    def prob_of_valid_moves(
+        self,
+        opening: TANMoveList = (),
+    ) -> float:
+        assert is_valid_movelist(opening), "opening movelist is invalid"
+        assert not is_conclusive_movelist(opening), "opening movelist must not be conclusive"
+
+        board = chess.Board()
+        for m in opening:
+            board.push_san(m)
+
+        encoded_continuations = []
+        for tan_move in get_legal_moves(board):
+            board_cp = deepcopy(board)
+            board_cp.push_san(tan_move)
+
+            # Encode move
+            t = torch.empty((len(tan_move) + 1,), dtype=torch.uint8)
+            t[: len(tan_move)] = encode_move(tan_move)
+
+            # Depending on whether the move concludes the game we add the
+            # end-of-game token or the move separator token.
+            t[-1] = WHITESPACE_TOKEN_ID if board_cp.outcome() is None else END_OF_GAME_TOKEN_ID
+            encoded_continuations.append(t)
+
+        prefix = encode_moveline(" ".join(opening) + " ")
+        prob = 0.0
+        for cont in encoded_continuations:
+            prob_cont = self.model.prob_of_continuation(prefix, cont)
+            prob += prob_cont
+
+        return prob
 
 
 def full_eval_transformer(

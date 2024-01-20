@@ -19,6 +19,8 @@ from .tools import (
 
 
 class VanillaTransformer(nn.Module):
+    # TODO: head_size aus anderen Parametern automatisch bestimmen
+    # TODO: ChessTransformer Klasse verwenden, die vocab_sz automatisch aus Vokabular bestimmt
     def __init__(
         self,
         vocab_sz,
@@ -58,6 +60,10 @@ class VanillaTransformer(nn.Module):
             p = p.to(self.device)
 
     def forward(self, x):
+        """
+        Returns the logits of the forward pass of `x`.
+        """
+
         # x: B, T (integer encoded)
         tok_embeddings = self.tok_embd(x.int())  # allow for uint8 inputs
         pos_embeddings = self.pos_embd(x.int())
@@ -192,7 +198,7 @@ class VanillaTransformer(nn.Module):
         for i in range(num_tokens):
             # Get logits for last time step
             logits = self(x)
-            logits = logits[:, -1, :] / .2  # (B, vocab_sz)
+            logits = logits[:, -1, :]  # (B, vocab_sz)
             probs = logits.softmax(-1)  # (B, vocab_sz)
             prediction = torch.multinomial(probs, num_samples=1)  # (B, 1)
             result[:, i : i + 1] = prediction
@@ -208,6 +214,31 @@ class VanillaTransformer(nn.Module):
             result = result.squeeze(0)
 
         return result
+
+    @torch.no_grad()
+    def prob_of_continuation(
+        self,
+        prefix: torch.Tensor,
+        continuation: torch.Tensor,
+    ) -> float:
+        """
+        Given a prefix, returns the probability of the continuation.
+        """
+
+        assert len(prefix.shape) == len(continuation.shape) == 1, "invalid dimensions, batching not allowed"
+        assert prefix.shape[0] >= 1 and continuation.shape[0] >= 1, "missing prefix or continuation"
+
+        cat = torch.cat((prefix, continuation))
+        logits = self.forward(cat.view((1, len(cat))))
+        probs = logits.softmax(-1)
+
+        # We have to cast the index vector to long, as a uint8 tensor is
+        # interpreted as a bitmask. See
+        # https://github.com/pytorch/pytorch/issues/70916
+        probs_cont = probs[0, (len(prefix) - 1) + torch.arange(len(continuation)), continuation.long()]
+        prob = probs_cont.prod().item()
+
+        return prob
 
 
 class AttentionHead(nn.Module):

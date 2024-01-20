@@ -80,4 +80,3 @@ plot
 plot = performance.plot_puzzle_len_of_opening_vs_num_legal_moves(data["one_move_checkmate_puzzles"])
 plot
 ```
-

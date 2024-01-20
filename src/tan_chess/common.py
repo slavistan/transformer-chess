@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from copy import deepcopy
 from enum import Enum
-from typing import Sequence
+from typing import Sequence, List
 
 import chess
 
@@ -85,6 +85,18 @@ class TANPlayer(ABC):
 
         Returns self.
         """
+
+
+def get_legal_moves(
+    board: chess.Board,
+) -> List[TANMove]:
+    """
+    Give a position represented by `board`, returns a list of valid moves in
+    TAN format.
+    """
+
+    legal_moves = [uci_to_tan(uci_move, board) for uci_move in board.legal_moves]
+    return legal_moves
 
 
 def uci_to_tan(
@@ -175,6 +187,10 @@ def is_valid_moveline(
       - moveline must constitute a series of valid moves
     """
 
+    # Moveline may be empty.
+    if len(moveline) == 0:
+        return True
+
     # Moveline must be a string.
     if not isinstance(moveline, TANMoveLine):
         return False
@@ -202,6 +218,26 @@ def is_valid_moveline(
     return True
 
 
+def is_valid_movelist(
+    movelist: TANMoveList,
+) -> bool:
+    return is_valid_moveline(" ".join(movelist))
+
+
+def is_conclusive_movelist(
+    movelist: TANMoveList,
+) -> bool:
+    """
+    Returns true iff the last move in `movelist` concludes the game.
+    """
+
+    board = chess.Board()
+    for m in movelist:
+        board.push_san(m)
+    is_eog = board.outcome() is not None
+    return is_eog
+
+
 # TODO: test
 def is_game_ending_move(
     move: TANMove,
@@ -216,3 +252,17 @@ def is_game_ending_move(
     board = deepcopy(board)
     board.push_san(move)
     return board.outcome() is not None
+
+
+def movelist_to_moveline(
+    movelist: TANMoveList,
+) -> TANMoveLine:
+    moveline = " ".join(movelist)
+    return moveline
+
+
+def moveline_to_movelist(
+    moveline: TANMoveLine,
+) -> TANMoveList:
+    movelist = moveline.split(" ")
+    return movelist
