@@ -19,3 +19,4 @@ Idee
 - Schachbrett mit Anzahl benötigter Wiederholungen versehen
 - Schachbrett mit Wahrscheinlichkeitsmasse der legalen Züge versehen
 - Headsize automatisch aus Anzahl Heads und Embeddingdim bestimmen
+- Trainingsdaten dynamisch aus Positionen erzeugen, mit denen der Transformer gemäß der Wahrscheinlichkeitmasse legaler Züge Probleme hat. Ausgehend von diesen Position via RandomPlayer für jeden legalen Zug ein Spiel erzeugen.

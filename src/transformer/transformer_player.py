@@ -12,7 +12,6 @@ from src.tan_chess import (
     TAN_MAX_MOVE_LEN,
     TANMove,
     TANMoveList,
-    TANMoveLine,
     TANPlayer,
     is_valid_move,
     full_eval,

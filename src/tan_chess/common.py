@@ -244,7 +244,7 @@ def is_game_ending_move(
     board: chess.Board,
 ) -> bool:
     """
-    Returns true if the move would end the game. The move must be valid.
+    Returns true iff the move would end the game. The move must be valid.
 
     The chess.Board object is not modified.
     """
