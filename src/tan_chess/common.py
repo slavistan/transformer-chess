@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+import os
 from copy import deepcopy
 from enum import Enum
 from typing import Sequence, List
+import multiprocessing as mp
+import subprocess
 
+import requests
 import chess
 
 TANMove = str
@@ -266,3 +270,44 @@ def moveline_to_movelist(
 ) -> TANMoveList:
     movelist = moveline.split(" ")
     return movelist
+
+
+def view_game(
+    moveline: TANMoveLine,
+) -> str:
+    """
+    Views a game in the browser.
+
+    The game is uploaded to the lichess servers via their public API and the
+    browser is opened afterwards. Requires the $BROWSER envvar to be set.
+
+    Returns the url of the game on the lichess website.
+    """
+
+    post_game_url = "https://lichess.org/api/import"
+    headers = {"accept": "application/json"}
+    data = {"pgn": moveline}
+    response = requests.post(
+        url=post_game_url,
+        headers=headers,
+        data=data,
+        timeout=5,
+    )
+    game_url = response.json()["url"]
+
+    if os.environ.get("BROWSER"):
+        p = mp.Process(
+            target=_view_game_open_browser,
+            args=(os.environ["BROWSER"], game_url),
+            daemon=True,
+        )
+        p.start()
+
+    return game_url
+
+
+def _view_game_open_browser(
+    browser_name: str,
+    url: str,
+):
+    subprocess.run([browser_name, url], check=False)
