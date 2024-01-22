@@ -26,10 +26,11 @@ def eval_perf(
     output_dir=None,
     num_random=16,
     num_self=16,
-    num_puzzle=64,
+    num_puzzle=64,  # FIXME: Off-by-one Fehler in der Anzahl der Puzzles
     num_puzzle_attempts=16,
     num_workers=1,
     num_tries_until_valid=16,  # char-level transformer tries
+    device="cpu",
 ):
     """
     Evaluates the performance of a transformer player.
@@ -44,8 +45,14 @@ def eval_perf(
     :param num_tries_until_valid: number of attempts to grant a transformer player to generate a valid move.
     """
 
-    # Create a lockfile, so that only one process is running concurrently.
-    # ...
+    # TODO: Fix CUDA error appearing after termination of the evaluation process.
+    #       [W CudaIPCTypes.cpp:15] Producer process has been terminated before
+    #       all shared CUDA tensors released. See Note [Sharing CUDA tensors]
+
+    # Create a lockfile so that only one process is running concurrently. The
+    # forward passes of a transformer are heavily parallized already, so that
+    # running multiple evaluations would just congest the system without any
+    # performance benefits, even for systems with lots of cores.
     lock = FileLock("/tmp/chess-transformer-eval.lock")
     try:
         with lock.acquire(timeout=0):
@@ -58,6 +65,8 @@ def eval_perf(
             stdout_path = f"{output_dir}/stdout"
             stderr_path = f"{output_dir}/stderr"
 
+            # FIXME: Puzzle Wahrscheinlichkeit des neuen TransformerPlayers ist z.T. auf 0.0%.
+            #        Wie ist das überhaupt möglich?
             result = full_eval_transformer(
                 pth_file=pth_file,
                 data_output_path=output_data_path,
@@ -68,6 +77,7 @@ def eval_perf(
                 num_puzzle_attempts=num_puzzle_attempts,
                 num_workers=num_workers,
                 num_tries_until_valid=num_tries_until_valid,
+                device=device,
             )
 
             with open(stdout_path, "wb") as f:
@@ -120,6 +130,7 @@ def play_model(
     *,
     device="cuda" if cuda.is_available() else "cpu",
     side="white",
+    num_tries_until_valid=16,
 ):
     """Plays a chess game against a model.
 
@@ -129,7 +140,7 @@ def play_model(
     """
 
     m = VanillaTransformer.load(pth_file).to(device)
-    model_player = TransformerPlayer(m, num_tries_until_valid=16)
+    model_player = TransformerPlayer(m, num_tries_until_valid=num_tries_until_valid)
     gui_player = GUIPlayer()
     players = [gui_player, model_player]
     if side == "black":

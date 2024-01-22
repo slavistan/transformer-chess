@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from copy import deepcopy
+from typing import Tuple, Dict
 from enum import Enum, auto
 import json
 
@@ -20,6 +20,8 @@ from src.tan_chess import (
     is_valid_movelist,
     is_conclusive_movelist,
     get_legal_moves,
+    is_game_ending_move,
+    movelist_to_moveline,
 )
 from .vanilla_transformer import VanillaTransformer
 from .tools import (
@@ -52,10 +54,10 @@ class TransformerPlayer(TANPlayer):
     ):
         self.model = model
         self.model_context_sz = self.model.init_params["context_sz"]
-        self.model_device = "cuda" if next(model.parameters()).is_cuda else "cpu"
+        self.model_device = self.model.device
         self.num_tries_until_valid = num_tries_until_valid
-        self.push_moves(movelist)
         self.reset()
+        self.push_moves(movelist)
 
     def push_moves(
         self,
@@ -80,7 +82,7 @@ class TransformerPlayer(TANPlayer):
 
         return self
 
-    def suggest_move(
+    def suggest_move_old(
         self,
     ) -> TransformerPlayer.ResignationReason | TANMove:
         if self.context_overflow:
@@ -131,6 +133,16 @@ class TransformerPlayer(TANPlayer):
 
         return TransformerPlayer.ResignationReason.CANT_CONSTRUCT_VALID_MOVE
 
+    def suggest_move(
+        self,
+    ) -> TransformerPlayer.ResignationReason | TANMove:
+        if self.context_overflow:
+            return TransformerPlayer.ResignationReason.CONTEXT_OVERFLOW
+
+        lmm, _ = self.legal_move_prob_map()
+        move = max(lmm, key=lmm.get)
+        return move
+
     def reset(
         self,
     ) -> TransformerPlayer:
@@ -155,10 +167,18 @@ class TransformerPlayer(TANPlayer):
         CANT_CONSTRUCT_VALID_MOVE = auto()
         """Failed to produce a valid move after a set amount of attempts"""
 
-    def prob_of_valid_moves(
+    def legal_move_prob(
         self,
         opening: TANMoveList = (),
     ) -> float:
+        """
+        Returns the aggregate probability assigned to legal moves given a
+        position specified by `opening`. If `opening` is empty, the default
+        chess starting position is assumed.
+
+        Returns a probability value between 0 and 1.
+        """
+
         assert is_valid_movelist(opening), "opening movelist is invalid"
         assert not is_conclusive_movelist(opening), "opening movelist must not be conclusive"
 
@@ -168,19 +188,18 @@ class TransformerPlayer(TANPlayer):
 
         encoded_continuations = []
         for tan_move in get_legal_moves(board):
-            board_cp = deepcopy(board)
-            board_cp.push_san(tan_move)
-
             # Encode move
             t = torch.empty((len(tan_move) + 1,), dtype=torch.uint8)
             t[: len(tan_move)] = encode_move(tan_move)
 
             # Depending on whether the move concludes the game we add the
             # end-of-game token or the move separator token.
-            t[-1] = WHITESPACE_TOKEN_ID if board_cp.outcome() is None else END_OF_GAME_TOKEN_ID
+            move_ends_game = is_game_ending_move(tan_move, board)
+            t[-1] = END_OF_GAME_TOKEN_ID if move_ends_game else WHITESPACE_TOKEN_ID
             encoded_continuations.append(t)
 
-        prefix = encode_moveline(" ".join(opening) + " ")
+        moveline = movelist_to_moveline(opening)
+        prefix = encode_moveline(moveline + " ")
         prob = 0.0
         for cont in encoded_continuations:
             prob_cont = self.model.prob_of_continuation(prefix, cont)
@@ -188,6 +207,35 @@ class TransformerPlayer(TANPlayer):
 
         return prob
 
+    def legal_move_prob_map(
+        self,
+    ) -> Tuple[Dict[TANMove, float], float]:
+
+        legal_moves = get_legal_moves(self.board)
+        if len(legal_moves) == 0:
+            return dict(), 0.0
+
+        move_prob_map = dict()
+        for tan_move in legal_moves:
+            # Encode move
+            t = torch.empty((len(tan_move) + 1,), dtype=torch.uint8, device=self.model.device)
+            t[: len(tan_move)] = encode_move(tan_move)
+
+            # Depending on whether the move concludes the game we add the
+            # end-of-game token or the move separator token.
+            move_ends_game = is_game_ending_move(tan_move, self.board)
+            t[-1] = END_OF_GAME_TOKEN_ID if move_ends_game else WHITESPACE_TOKEN_ID
+
+            prob_move = self.model.prob_of_continuation(self.movetensor[:self.write_idx], t)
+            move_prob_map[tan_move] = prob_move
+
+        # Scale probs of legal moves so they sum up to 1.
+        apolm = sum((p for p in move_prob_map.values()))  # aggregate probability of legal moves
+        if apolm != 0.0:
+            for k, v in move_prob_map.items():
+                move_prob_map[k] = v / apolm
+
+        return move_prob_map, apolm
 
 def full_eval_transformer(
     pth_file: str,
@@ -200,6 +248,7 @@ def full_eval_transformer(
     num_puzzle_attempts=64,
     num_workers=1,
     num_tries_until_valid=16,
+    device="cpu",
 ):
     # TODO: machine-independent way of storing puzzles
     puzzles = list(
@@ -209,7 +258,8 @@ def full_eval_transformer(
         )
     )
 
-    m = VanillaTransformer.load(pth_file).to("cpu")
+    m = VanillaTransformer.load(pth_file).to(device)
+    m.device = device  # FIXME: Do this inside into .load()
     player = TransformerPlayer(m, num_tries_until_valid=num_tries_until_valid)
     eval_results = full_eval(
         player,

@@ -40,7 +40,7 @@ TAN_EOG_CHARS = (
     "W",  # white wins
     "S",  # black wins
     "U",  # draw
-)  # white wins  # black wins  # draw
+)
 
 # A gameline is the whitespace-separated concatenation of a game's movelist,
 # including the end of game identifier, e.g.

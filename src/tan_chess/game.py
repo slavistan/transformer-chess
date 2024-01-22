@@ -154,6 +154,10 @@ def play_game(
     # (black, white) for two players, otherwise (white)
     players = ([black] if black is not None else []) + [white]
 
+    # Reset players, just in case we're playing multiple games back to back.
+    for p in players:
+        p.reset()
+
     # Set up board and play opening moves.
     board = chess.Board()
     try:

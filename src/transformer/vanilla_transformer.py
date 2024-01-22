@@ -225,10 +225,17 @@ class VanillaTransformer(nn.Module):
         Given a prefix, returns the probability of the continuation.
         """
 
+        # TODO: Optimize the hell out of this function.
+        #       - Can this be batched?
+        #       - Can the performance be improved?
+
         assert len(prefix.shape) == len(continuation.shape) == 1, "invalid dimensions, batching not allowed"
         assert prefix.shape[0] >= 1 and continuation.shape[0] >= 1, "missing prefix or continuation"
 
         cat = torch.cat((prefix, continuation))
+        if len(cat) >= self.init_params["context_sz"]:
+            # Inputs exceeding the context size yield a prob of zero.
+            return 0.0
         logits = self.forward(cat.view((1, len(cat))))
         probs = logits.softmax(-1)
 

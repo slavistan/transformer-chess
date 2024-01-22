@@ -54,7 +54,7 @@ def decode_individual(
     result = "".join([_decode_gameline_dict[int(i)] for i in x])
     return result
 
-
+# TODO: Replace by encode_individual
 def encode_move(
     tan_move: TANMove,
 ) -> torch.Tensor:
