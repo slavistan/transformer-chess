@@ -216,7 +216,7 @@ class VanillaTransformer(nn.Module):
         return result
 
     @torch.no_grad()
-    def prob_of_continuation(
+    def prob_of_continuation_old_killmepls(
         self,
         prefix: torch.Tensor,
         continuation: torch.Tensor,
@@ -247,6 +247,47 @@ class VanillaTransformer(nn.Module):
 
         return prob
 
+    @torch.no_grad()
+    def prob_of_continuation(
+        self,
+        prefix: torch.Tensor,
+        continuations: torch.Tensor,
+        padding: int,
+    ) -> torch.Tensor:
+        assert len(continuations.shape) == 2, "expected a 2d tensor, one row per continuation"
+
+        # TODO: optimieren, aufräumen und dokumentieren
+        prefix = prefix.repeat(continuations.shape[0], 1)
+        sequences = torch.cat((prefix, continuations), dim=1)
+
+        mask = (sequences == padding)
+        sequences[mask] = 0
+
+        logits = self.forward(sequences)
+        probs = logits.softmax(-1)
+        prob_mask = torch.cat((mask, torch.ones((sequences.shape[0], 1)).type(torch.bool)), dim=1)[:, 1:]
+        probs[prob_mask, :] = 1.0
+
+        t_idx = prefix.shape[1] - 1 + torch.arange(continuations.shape[1])
+        probs_foo = torch.empty(continuations.shape, dtype=torch.float)
+        # TODO: get rid of the loop
+        for i in range(continuations.shape[0]):
+            c_idx = sequences[i, prefix.shape[1] :]
+            probs_cont = probs[i, t_idx, c_idx]
+            probs_foo[i] = probs_cont
+
+        probs_final = probs_foo.prod(dim=-1)
+
+        return probs_final
+
+    def to(
+        self,
+        device: str,
+    ) -> VanillaTransformer:
+        super().to(device)
+        self.device = device
+
+        return self
 
 class AttentionHead(nn.Module):
     """

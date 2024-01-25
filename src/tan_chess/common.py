@@ -273,7 +273,7 @@ def moveline_to_movelist(
 
 
 def view_game(
-    moveline: TANMoveLine,
+    moveline: TANMoveLine | TANMoveList,
 ) -> str:
     """
     Views a game in the browser.
@@ -283,6 +283,9 @@ def view_game(
 
     Returns the url of the game on the lichess website.
     """
+
+    if not isinstance(moveline, TANMoveLine):
+        moveline = " ".join(moveline)
 
     post_game_url = "https://lichess.org/api/import"
     headers = {"accept": "application/json"}

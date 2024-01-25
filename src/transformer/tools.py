@@ -64,10 +64,12 @@ def encode_move(
     The move may contain whitespaces, which will be encoded correctly.
     """
 
-    arr = np.empty((len(tan_move),), dtype=np.uint8)
+    arr = np.empty((len(tan_move),), dtype=np.int32)
     for i, c in enumerate(tan_move):
         arr[i] = _encode_gameline_dict[c]
-    return torch.from_numpy(arr)
+    t = torch.from_numpy(arr)
+
+    return t.type(torch.long)
 
 
 def encode_gameline(
