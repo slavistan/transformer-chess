@@ -15,6 +15,7 @@ from .common import (
     TANMoveList,
     TANPlayer,
     uci_to_tan,
+    get_legal_moves,
 )
 
 
@@ -204,6 +205,7 @@ class GUIPlayer(TANPlayer):
                 pass
             else:
                 movename_uci = self.selected_square + square
+                # TODO: implement promotion
                 move_uci = chess.Move.from_uci(movename_uci)
                 if move_uci in self.board.legal_moves:
                     move = uci_to_tan(move_uci, self.board)

@@ -369,7 +369,6 @@ def make_report(eval_json: str, output: str):
 #     num_puzzles=256,
 #     num_puzzle_attempts=64,
 #     num_workers=1,
-#     num_tries_until_valid=16,
 # ):
 #     # TODO: machine-independent way of storing puzzles
 #     puzzles = list(
@@ -380,7 +379,7 @@ def make_report(eval_json: str, output: str):
 #     )
 
 #     m = vanilla_transformer.Model.load(pth_file).to("cpu")
-#     player = vanilla_transformer.TransformerPlayer(m, num_tries_until_valid=num_tries_until_valid)
+#     player = vanilla_transformer.TransformerPlayer(m)
 #     eval_results = full_eval(
 #         player,
 #         puzzles,

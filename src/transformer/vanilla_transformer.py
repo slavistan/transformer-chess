@@ -216,38 +216,6 @@ class VanillaTransformer(nn.Module):
         return result
 
     @torch.no_grad()
-    def prob_of_continuation_old_killmepls(
-        self,
-        prefix: torch.Tensor,
-        continuation: torch.Tensor,
-    ) -> float:
-        """
-        Given a prefix, returns the probability of the continuation.
-        """
-
-        # TODO: Optimize the hell out of this function.
-        #       - Can this be batched?
-        #       - Can the performance be improved?
-
-        assert len(prefix.shape) == len(continuation.shape) == 1, "invalid dimensions, batching not allowed"
-        assert prefix.shape[0] >= 1 and continuation.shape[0] >= 1, "missing prefix or continuation"
-
-        cat = torch.cat((prefix, continuation))
-        if len(cat) >= self.init_params["context_sz"]:
-            # Inputs exceeding the context size yield a prob of zero.
-            return 0.0
-        logits = self.forward(cat.view((1, len(cat))))
-        probs = logits.softmax(-1)
-
-        # We have to cast the index vector to long, as a uint8 tensor is
-        # interpreted as a bitmask. See
-        # https://github.com/pytorch/pytorch/issues/70916
-        probs_cont = probs[0, (len(prefix) - 1) + torch.arange(len(continuation)), continuation.long()]
-        prob = probs_cont.prod().item()
-
-        return prob
-
-    @torch.no_grad()
     def prob_of_continuation(
         self,
         prefix: torch.Tensor,
@@ -260,7 +228,7 @@ class VanillaTransformer(nn.Module):
         prefix = prefix.repeat(continuations.shape[0], 1)
         sequences = torch.cat((prefix, continuations), dim=1)
 
-        mask = (sequences == padding)
+        mask = sequences == padding
         sequences[mask] = 0
 
         logits = self.forward(sequences)
@@ -280,6 +248,7 @@ class VanillaTransformer(nn.Module):
 
         return probs_final
 
+    # TODO: built-in to() verwenden
     def to(
         self,
         device: str,
@@ -288,6 +257,7 @@ class VanillaTransformer(nn.Module):
         self.device = device
 
         return self
+
 
 class AttentionHead(nn.Module):
     """

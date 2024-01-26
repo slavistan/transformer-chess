@@ -29,7 +29,6 @@ def eval_perf(
     num_puzzle=64,  # FIXME: Off-by-one Fehler in der Anzahl der Puzzles
     num_puzzle_attempts=16,
     num_workers=1,
-    num_tries_until_valid=16,  # char-level transformer tries
     device="cpu",
 ):
     """
@@ -42,7 +41,6 @@ def eval_perf(
     :param num_puzzle: number of one-move checkmate puzzles to player.
     :param num_puzzle_attempts: number of attempts per puzzle.
     :param num_workers: number of cpus for multiprocessing.
-    :param num_tries_until_valid: number of attempts to grant a transformer player to generate a valid move.
     """
 
     # TODO: Fix CUDA error appearing after termination of the evaluation process.
@@ -76,7 +74,6 @@ def eval_perf(
                 num_puzzles=num_puzzle,
                 num_puzzle_attempts=num_puzzle_attempts,
                 num_workers=num_workers,
-                num_tries_until_valid=num_tries_until_valid,
                 device=device,
             )
 
@@ -130,7 +127,6 @@ def play_model(
     *,
     device="cuda" if cuda.is_available() else "cpu",
     side="white",
-    num_tries_until_valid=16,
 ):
     """Plays a chess game against a model.
 
@@ -140,7 +136,7 @@ def play_model(
     """
 
     m = VanillaTransformer.load(pth_file).to(device)
-    model_player = TransformerPlayer(m, num_tries_until_valid=num_tries_until_valid)
+    model_player = TransformerPlayer(m)
     gui_player = GUIPlayer()
     players = [gui_player, model_player]
     if side == "black":

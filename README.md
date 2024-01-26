@@ -16,6 +16,7 @@
 - Transformer
     - Check allocation of memory on the correct device. Something's not quite right here, especially when loading from file via .load().
     - Synthetically augment real-world game data according to how well a position is understood by the transformer, gauged by the probability mass assigned to legal moves.
+    - Consistent usage of an integer type for the tensors. We're using uint8, int and long currently.
 
 ## V2.0
 
