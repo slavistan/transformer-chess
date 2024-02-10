@@ -25,8 +25,6 @@ class VanillaTransformer(nn.Module, BaseTransformer):
         num_transformer_blocks,
         head_sz,
         lr,
-        *,
-        device="cpu",
     ):
         super().__init__()
 
@@ -47,12 +45,6 @@ class VanillaTransformer(nn.Module, BaseTransformer):
 
         # Optimizer
         self.optimizer = torch.optim.AdamW(self.parameters(), lr=lr)
-
-        # ???: How to I move the whole thing to the device?
-        self.device = device
-        self.to(self.device)
-        for p in self.parameters():
-            p = p.to(self.device)
 
     def forward(self, x):
         """
@@ -133,8 +125,6 @@ class VanillaTransformer(nn.Module, BaseTransformer):
         """
 
         self.train()
-        x = x.to(self.device)
-        y = y.to(self.device)
 
         # Forward pass.
         logits = self(x)

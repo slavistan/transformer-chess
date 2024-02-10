@@ -129,7 +129,7 @@ def filter_tan(tan_file: str, outcome_union_str: str, *, output=None, num_worker
 def play_model(
     pth_file: str,
     *,
-    device="cuda" if cuda.is_available() else "cpu",
+    device="cpu",
     side="white",
 ):
     """Plays a chess game against a model.
@@ -139,7 +139,9 @@ def play_model(
     :param side: Side to play as, either 'white' or 'black'.
     """
 
-    m = VanillaTransformer.load(pth_file).to(device)
+    # m = VanillaTransformer.load(pth_file).to(device)
+    m = torch.load(pth_file)
+    m.to(device)
     model_player = TransformerPlayer(m)
     gui_player = GUIPlayer()
     players = [gui_player, model_player]
@@ -190,15 +192,4 @@ def main():
 
 
 if __name__ == "__main__":
-    if os.environ.get("MAX_RAM", None) is not None:
-        # TODO: Doesn't work; probably doesn't really measure the right ram usage
-        max_ram = int(float(os.environ["MAX_RAM"]))
-        logging.info(f"Limit max RAM usage of process to {max_ram} bytes.")
-        resource.setrlimit(resource.RLIMIT_AS, (max_ram, max_ram))
-        try:
-            main()
-        except MemoryError as e:
-            logging.error(f"Process terminated due to exceeding the set memory limit of {max_ram} bytes.")
-            sys.exit(1)
-    else:
-        main()
+    main()

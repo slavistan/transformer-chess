@@ -88,7 +88,7 @@ class TransformerPlayer(TANPlayer):
             (self.model_context_sz,),
             PADDING_TOKEN_ID,
             dtype=torch.long,
-            device=self.model.device,
+            device=next(self.model.parameters()).device,
             requires_grad=False,
         )
         self.movetensor[0] = START_OF_GAME_TOKEN_ID
@@ -116,12 +116,13 @@ class TransformerPlayer(TANPlayer):
             fill_value=-1,  # -1 is the padding token
             size=(len(legal_moves), max((len(m) for m in legal_moves)) + 1),
             dtype=torch.long,
+            device=next(self.model.parameters()).device,
         )
 
         # TODO: Optimize; remove loop, use numpy array and convert to tensor
         for i, tan_move in enumerate(legal_moves):
             # Encode move
-            t = torch.empty((len(tan_move) + 1,), dtype=torch.long, device=self.model.device)
+            t = torch.empty((len(tan_move) + 1,), dtype=torch.long, device=continuations.device)
             t[: len(tan_move)] = encode_movechars(tan_move)
 
             # Depending on whether the move concludes the game we add the
@@ -169,8 +170,7 @@ def full_eval_transformer(
         )
     )
 
-    m = VanillaTransformer.load(pth_file).to(device)
-    m.device = device  # FIXME: Do this inside into .load()
+    m = torch.load(pth_file).to(device)
     player = TransformerPlayer(m)
     eval_results = full_eval(
         player,
