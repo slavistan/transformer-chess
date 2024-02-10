@@ -19,7 +19,7 @@ class Test_vs_random:
     @pytest.mark.parametrize("num_games,play_as,num_workers", product([1, 2, 4, 8], ["white", "black"], [1, 2, 4, 8]))
     def test_random_vs_random(self, num_games, play_as, num_workers):
         p = RandomPlayer()
-        games = vs_random(p, num_games, play_as=play_as, num_workers=num_workers)
+        games = vs_random(p, play_as, num_games, num_workers)
 
         assert len(games) == num_games
 

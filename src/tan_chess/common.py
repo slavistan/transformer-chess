@@ -265,6 +265,8 @@ def movelist_to_moveline(
     return moveline
 
 
+# TODO: einheitliche Nomenklatur für Konversionsfunktionen
+#       entweder a_from_b oder a_to_b
 def moveline_to_movelist(
     moveline: TANMoveLine,
 ) -> TANMoveList:

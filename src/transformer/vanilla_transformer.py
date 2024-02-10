@@ -1,24 +1,19 @@
 from __future__ import annotations
 
-import os
 import time
 import subprocess
 from datetime import datetime
 
 import numpy as np
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
 from torch import nn
 from torch.nn import functional as F
 
-from src.tools import lines
-from .tools import (
-    encode_gameline,
-    PADDING_TOKEN_ID,
-)
+from .base_transformer import BaseTransformer
 
 
-class VanillaTransformer(nn.Module):
+class VanillaTransformer(nn.Module, BaseTransformer):
     # TODO: head_size aus anderen Parametern automatisch bestimmen
     # TODO: ChessTransformer Klasse verwenden, die vocab_sz automatisch aus Vokabular bestimmt
     def __init__(
@@ -66,7 +61,7 @@ class VanillaTransformer(nn.Module):
 
         # x: B, T (integer encoded)
         tok_embeddings = self.tok_embd(x.int())  # allow for uint8 inputs
-        pos_embeddings = self.pos_embd(x.int())
+        pos_embeddings = self.pos_embd(x.int())  # TODO: Remove uint8 inputs, use int or long everywhere
         x = self.transformer_blocks(tok_embeddings + pos_embeddings)  # (B, T, C)
         logits = self.lm_head(x)  # vocab_sz
         return logits
@@ -154,109 +149,12 @@ class VanillaTransformer(nn.Module):
 
         return loss.item()
 
-    @torch.no_grad()
-    def eval_loss(self, x, y, chunk_sz=128):
-        """
-        Computes loss in evaluation mode.
-        """
-
-        # ???: Why do we oom if we don't chunk the data set?
-        training = self.training
-        self.eval()
-        losses = []
-        num_chunks = int(np.ceil(len(x) / chunk_sz))
-        for c in range(num_chunks):
-            x_chunk = x[c * chunk_sz : (c + 1) * chunk_sz]
-            y_chunk = y[c * chunk_sz : (c + 1) * chunk_sz]
-            logits = self.forward(x_chunk)
-            loss = self.loss(logits, y_chunk)
-            losses.append(loss.item())
-        self.train(training)
-        return np.mean(losses), np.std(losses)
-
     def save(self, path):
         torch.save(self, path)
 
     @staticmethod
     def load(path) -> VanillaTransformer:
         return torch.load(path)
-
-    @torch.no_grad()
-    def generate(self, x: torch.Tensor, num_tokens=1):
-        # Be friendly towards 1D inputs without batch dimension. We add a flat
-        # dimension so the model get the shape of data it expects.
-        squeeze = False
-        if x.dim() == 1:
-            squeeze = True
-            x = x.unsqueeze(0)
-
-        training = self.training
-        self.eval()
-
-        # x is (B, T) tensor of indices.
-        result = torch.empty((x.shape[0], num_tokens), dtype=x.dtype)
-        for i in range(num_tokens):
-            # Get logits for last time step
-            logits = self(x)
-            logits = logits[:, -1, :]  # (B, vocab_sz)
-            probs = logits.softmax(-1)  # (B, vocab_sz)
-            prediction = torch.multinomial(probs, num_samples=1)  # (B, 1)
-            result[:, i : i + 1] = prediction
-            x = torch.cat((x, prediction), dim=-1)  # (B, T+1)
-
-        self.train(training)
-
-        # Squeeze flat dimension added earlier. Note that we can't just check
-        # result.shape[0] == 1 and omit the squeeze state altogether, as we'd
-        # then squeeze out batch dimensions of size 1, even if they were
-        # provided by the caller.
-        if squeeze:
-            result = result.squeeze(0)
-
-        return result
-
-    @torch.no_grad()
-    def prob_of_continuation(
-        self,
-        prefix: torch.Tensor,
-        continuations: torch.Tensor,
-        padding: int,
-    ) -> torch.Tensor:
-        assert len(continuations.shape) == 2, "expected a 2d tensor, one row per continuation"
-
-        # TODO: optimieren, aufräumen und dokumentieren
-        prefix = prefix.repeat(continuations.shape[0], 1)
-        sequences = torch.cat((prefix, continuations), dim=1)
-
-        mask = sequences == padding
-        sequences[mask] = 0
-
-        logits = self.forward(sequences)
-        probs = logits.softmax(-1)
-        prob_mask = torch.cat((mask, torch.ones((sequences.shape[0], 1)).type(torch.bool)), dim=1)[:, 1:]
-        probs[prob_mask, :] = 1.0
-
-        t_idx = prefix.shape[1] - 1 + torch.arange(continuations.shape[1])
-        probs_foo = torch.empty(continuations.shape, dtype=torch.float)
-        # TODO: get rid of the loop
-        for i in range(continuations.shape[0]):
-            c_idx = sequences[i, prefix.shape[1] :]
-            probs_cont = probs[i, t_idx, c_idx]
-            probs_foo[i] = probs_cont
-
-        probs_final = probs_foo.prod(dim=-1)
-
-        return probs_final
-
-    # TODO: built-in to() verwenden
-    def to(
-        self,
-        device: str,
-    ) -> VanillaTransformer:
-        super().to(device)
-        self.device = device
-
-        return self
 
 
 class AttentionHead(nn.Module):
@@ -364,71 +262,3 @@ class TransformerBlock(nn.Module):
         x = self.layer_norm2(x)
         x = x + self.feed_forward(x)
         return x
-
-
-class RAMDump(Dataset):
-    data: torch.Tensor
-
-    def __init__(
-        self,
-        data: torch.Tensor,
-    ):
-        self.data = data
-
-    def __getitem__(self, idx):
-        return self.data[idx, :-1], self.data[idx, 1:]
-
-    def __len__(self):
-        return len(self.data)
-
-    def mem_size(self):
-        return self.data.nelement() * self.data.element_size()
-
-    @staticmethod
-    def from_tan_file(
-        tan_file_path: str,
-        context_size: int,
-    ) -> RAMDump:
-        # Tensor width and height.
-        width = context_size + 1
-        height = sum((1 for _ in lines(tan_file_path, max_len=width)))
-
-        # Initialize tensor with the padding token's id.
-        data = torch.full((height, width), fill_value=PADDING_TOKEN_ID, dtype=torch.uint8)
-        for i, line in enumerate(lines(tan_file_path, max_len=width)):
-            gameline = line.rstrip()
-            encd = encode_gameline(gameline)
-            data[i, : len(encd)] = encd
-            if (i + 1) % 10000 == 0 or (i + 1) == height:
-                progress = f"{i+1}/{height}"
-                print("\r" * len(progress), f"Loading games to memory: {i+1}/{height}", end="")
-        print()
-
-        return RAMDump(data)
-
-    @staticmethod
-    def tan_to_tensor_file(
-        tan_gameline_file: str,
-        context_size: int,
-        output_path: str,  # path to output file
-    ):
-        """
-        Parses a file containing newline-separated TAN gamelines. The games are encoded
-        (tokenized) and written to a 'torch.Tensor' of dtype 'torch.uint8'.
-
-        Games, whose encoded data would exceed the context size are skipped. The resulting
-        tensor has 'context_size + 1' columns and one row per gameline.
-        """
-
-        dataset = RAMDump.from_tan_file(tan_gameline_file, context_size)
-        output_dir = os.path.dirname(output_path)
-        os.makedirs(output_dir, exist_ok=True)
-        torch.save(dataset.data, output_path)
-        print(f"Wrote tensor to '{output_path}'.")
-
-    @staticmethod
-    def from_tensor_file(
-        tensor_file_path: str,
-    ) -> RAMDump:
-        data = torch.load(tensor_file_path)
-        return RAMDump(data)

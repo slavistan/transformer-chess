@@ -2,6 +2,7 @@
 
 ## V1.0
 
+- Eval: Anzahl Spielfiguren auf dem Brett tracken
 - Rework db_utils to use new multiprocessing approach.
 - Check if training games are, in fact, conclusive.
 - TransformerPlayer
@@ -20,7 +21,10 @@
 
 ## V2.0
 
-- Combine multiple lichess databases and remove duplicate games.
+- !!!: Combine multiple lichess databases and remove duplicate games.
+- !!!: Performance Metriken + Reports
 - Transformer: Rework transformer to remove unaligned head sizes. Head size is determined from the number of heads and the embedding dimension.
 - Try different sampling methods (top-k, top-p)
 - Fine-tuning with games from high-performance computer chess engines.
+- Evaluation: Aggregate probability of _good_ moves
+- !!!: BIGGER TRANSFORMER MOAAAR

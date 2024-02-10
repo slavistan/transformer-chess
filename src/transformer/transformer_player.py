@@ -20,12 +20,12 @@ from src.tan_chess import (
     is_game_ending_move,
 )
 from .vanilla_transformer import VanillaTransformer
-from .tools import (
+from .tokenizer import (
     PADDING_TOKEN_ID,
     WHITESPACE_TOKEN_ID,
     START_OF_GAME_TOKEN_ID,
     END_OF_GAME_TOKEN_ID,
-    encode_move,
+    encode_movechars,
 )
 
 
@@ -61,7 +61,7 @@ class TransformerPlayer(TANPlayer):
             if self.write_idx + TAN_MAX_MOVE_LEN >= len(self.movetensor):
                 self.context_overflow = True
                 return self
-            encoded_move = encode_move(m + " ")
+            encoded_move = encode_movechars(m + " ")
             num_tokens = len(encoded_move)
 
             self.movetensor[self.write_idx : self.write_idx + num_tokens] = encoded_move
@@ -122,7 +122,7 @@ class TransformerPlayer(TANPlayer):
         for i, tan_move in enumerate(legal_moves):
             # Encode move
             t = torch.empty((len(tan_move) + 1,), dtype=torch.long, device=self.model.device)
-            t[: len(tan_move)] = encode_move(tan_move)
+            t[: len(tan_move)] = encode_movechars(tan_move)
 
             # Depending on whether the move concludes the game we add the
             # end-of-game token or the move separator token.
@@ -143,6 +143,8 @@ class TransformerPlayer(TANPlayer):
         if apolm != 0.0:
             for k, v in move_prob_map.items():
                 move_prob_map[k] = v / apolm
+
+        print(f"{apolm=}, num_legal={len(move_prob_map)}")
 
         return move_prob_map, apolm
 

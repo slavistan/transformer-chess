@@ -1,16 +1,20 @@
 """CLI interface."""
 
 import multiprocessing as mp
-from filelock import FileLock, Timeout
 import resource
 import os
 import time
 import sys
 import logging
+
+from filelock import FileLock, Timeout
 from torch import cuda
 import clize
+import torch
+
 from src import db_utils, tan_chess
 from src.tan_chess import GUIPlayer
+from src.transformer.tokenizer import encode_tan_file
 from src.transformer.vanilla_transformer import VanillaTransformer
 from src.transformer.transformer_player import TransformerPlayer, full_eval_transformer
 
@@ -146,6 +150,33 @@ def play_model(
     # different setup for playing games altogehter.
 
 
+def tokenize(
+    tan_file_path: str,
+    context_size: int,
+    *,
+    output_path=None,
+):
+    """
+    Tokenizes the games in a TAN file and saves the resulting tensor of dtype
+    'torch.uint8' and of width 'context_size + 1' to disk. Only games whose
+    token sequences fit the width are processed.
+
+    :param tan_file_path: Path to the input file of gamelines in TAN format.
+    :param context_size: Context size of the transformer to be trained. The width of the resulting tensor will be 'context_size + 1'.
+    :param output_path: Output path of tensor file. Is left empty, '_context-sz=<CONTEXT_SIZE>.pt' will be appended to the input file path to be used as output path. Subdirectories will be created.
+    """
+
+    tan_file_path = os.path.abspath(tan_file_path)
+    if output_path is None:
+        output_path = tan_file_path + f"_context-sz={context_size}.pt"
+    else:
+        output_path = os.path.abspath(output_path)
+
+    os.makedirs(os.path.dirname(output_path), exist_ok=True, mode=0o644)
+    data = encode_tan_file(tan_file_path, context_size)
+    torch.save(data, output_path)
+
+
 def main():
     clize.run(
         {
@@ -153,6 +184,7 @@ def main():
             pgn_to_tan.__name__: pgn_to_tan,
             play_model.__name__: play_model,
             eval_perf.__name__: eval_perf,
+            tokenize.__name__: tokenize,
         }
     )
 

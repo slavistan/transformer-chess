@@ -2,7 +2,10 @@ import torch
 from pytest import approx
 
 from src.transformer.vanilla_transformer import VanillaTransformer
-from src.transformer.tools import vocab_size, encode_individual
+from src.transformer.tokenizer import (
+    vocab_size,
+    encode_movechars,
+)
 
 
 class Test_VanillaTransformer:
@@ -22,14 +25,14 @@ class Test_VanillaTransformer:
             vocab_sz=vocab_size(),
         )
 
-        prefix = encode_individual("a4 e5 ")
-        continuation = encode_individual("b4 Qxc4")
+        prefix = encode_movechars("a4 e5 ").type(torch.long)
+        continuation = encode_movechars("b4 Qxc4").type(torch.long).unsqueeze(0)
         prob = model.prob_of_continuation(prefix, continuation)
         assert 0.0 < prob < 1.0 or approx(prob) == 0.0 or approx(prob) == 1.0
 
         sum_prob = 0.0
         for i in range(vocab_size()):
-            prob = model.prob_of_continuation(prefix, torch.tensor([i], dtype=torch.uint8))
+            prob = model.prob_of_continuation(prefix, torch.tensor([[i]], dtype=torch.long))
             sum_prob += prob
 
         assert 1.0 == approx(sum_prob)
