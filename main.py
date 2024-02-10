@@ -1,21 +1,17 @@
 """CLI interface."""
 
 import multiprocessing as mp
-import resource
 import os
 import time
-import sys
 import logging
 
 from filelock import FileLock, Timeout
-from torch import cuda
 import clize
 import torch
 
 from src import db_utils, tan_chess
 from src.tan_chess import GUIPlayer
 from src.transformer.tokenizer import encode_tan_file
-from src.transformer.vanilla_transformer import VanillaTransformer
 from src.transformer.transformer_player import TransformerPlayer, full_eval_transformer
 
 logging.basicConfig(
@@ -127,21 +123,17 @@ def filter_tan(tan_file: str, outcome_union_str: str, *, output=None, num_worker
 
 
 def play_model(
-    pth_file: str,
-    *,
-    device="cpu",
+    pt_file: str,
     side="white",
 ):
-    """Plays a chess game against a model.
+    """
+    Plays a chess game against a trained transformer model checkpoint.
 
-    :param pth_file: Path to model file.
-    :param device: Device to run model on.
+    :param pt_file: Path to transformer model file.
     :param side: Side to play as, either 'white' or 'black'.
     """
 
-    # m = VanillaTransformer.load(pth_file).to(device)
-    m = torch.load(pth_file)
-    m.to(device)
+    m = torch.load(pt_file).to("cpu")
     model_player = TransformerPlayer(m)
     gui_player = GUIPlayer()
     players = [gui_player, model_player]
